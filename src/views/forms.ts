@@ -1,4 +1,5 @@
 import { db } from "../db"
+import { UNITS } from "../types"
 import type { Item, ItemInput, ItemType, ViewCtx } from "../types"
 import { h, clear, toast } from "../ui"
 import { closeModal, openModal } from "../modal"
@@ -32,6 +33,18 @@ function textInput(
   return input
 }
 
+function unitSelect(value: string | null): HTMLSelectElement {
+  const select = document.createElement("select")
+  select.className = "input"
+  select.name = "unit"
+  select.append(h("option", { value: "" }, ["\u2014 Select unit \u2014"]))
+  for (const u of UNITS) select.append(h("option", { value: u }, [u]))
+  const isKnown = !!value && (UNITS as readonly string[]).includes(value)
+  if (value && !isKnown) select.append(h("option", { value }, [value]))
+  select.value = value ?? ""
+  return select
+}
+
 export async function openItemForm(ctx: ViewCtx, existing?: Item): Promise<void> {
   const categories = await db.getCategories()
   const isEdit = !!existing
@@ -53,7 +66,7 @@ export async function openItemForm(ctx: ViewCtx, existing?: Item): Promise<void>
   const sku = textInput("sku", existing?.sku ?? "", { placeholder: "e.g. RICE-5KG (optional)" })
   const category = textInput("category", existing?.category ?? "", { placeholder: "e.g. Groceries", list: "cat-list" })
   const quantity = textInput("quantity", String(existing?.quantity ?? 0), { type: "number", min: "0", step: "1" })
-  const unit = textInput("unit", existing?.unit ?? "", { placeholder: "pcs, box, kg..." })
+  const unit = unitSelect(existing?.unit ?? null)
   const price = textInput("price", String(existing?.price ?? 0), { type: "number", min: "0", step: "0.01" })
   const location = textInput("location", existing?.location ?? "", { placeholder: "e.g. Shelf A1" })
   const reorder = textInput("reorder_level", String(existing?.reorder_level ?? 0), { type: "number", min: "0", step: "1" })
@@ -107,7 +120,7 @@ export async function openItemForm(ctx: ViewCtx, existing?: Item): Promise<void>
       sku: sku.value.trim(),
       category: category.value.trim(),
       quantity: Math.max(0, Math.floor(Number(quantity.value) || 0)),
-      unit: unit.value.trim(),
+      unit: unit.value,
       price: Math.max(0, Number(price.value) || 0),
       location: location.value.trim(),
       reorder_level: Math.max(0, Math.floor(Number(reorder.value) || 0)),
@@ -124,7 +137,7 @@ export async function openItemForm(ctx: ViewCtx, existing?: Item): Promise<void>
         const opening = input.quantity
         const created = await db.createItem({ ...input, quantity: 0 })
         if (opening > 0) {
-          await db.addMovement(created.id, "in", opening, "Opening balance", "")
+          await db.addMovement(created.id, "in", opening, "Opening balance", "", input.price)
         }
         toast("Product added", "success")
       }
@@ -160,6 +173,13 @@ export async function openStockModal(ctx: ViewCtx, item: Item): Promise<void> {
 
   const note = textInput("note", "", { placeholder: "Optional note" })
 
+  const unitPrice = textInput("unit_price", String(item.price || 0), { type: "number", min: "0", step: "0.01" })
+  const unitPriceField = field(
+    `Unit price (${ctx.settings.currency})`,
+    unitPrice,
+    "Cost per unit for this batch of stock. Used to value inventory (FIFO).",
+  )
+
   const currentLabel = h("div", { class: "stock-current", html: `Current stock: <b>${item.quantity}${item.unit ? " " + item.unit : ""}</b>` })
 
   const inBtn = h("button", { class: "seg seg-active", type: "button", onclick: () => setMode("in") }, ["+ Add stock"])
@@ -173,6 +193,7 @@ export async function openStockModal(ctx: ViewCtx, item: Item): Promise<void> {
     inBtn.classList.toggle("seg-in", m === "in")
     outBtn.classList.toggle("seg-out", m === "out")
     buildReasons(m)
+    unitPriceField.style.display = m === "in" ? "" : "none"
     updateWarning()
   }
 
@@ -198,6 +219,7 @@ export async function openStockModal(ctx: ViewCtx, item: Item): Promise<void> {
     currentLabel,
     segGroup,
     field("Quantity", stepper),
+    unitPriceField,
     field("Reason", reasonSelect),
     field("Note", note),
     warning,
@@ -213,7 +235,8 @@ export async function openStockModal(ctx: ViewCtx, item: Item): Promise<void> {
     confirmBtn.disabled = true
     confirmBtn.textContent = "Saving..."
     try {
-      await db.addMovement(item.id, mode, q, reasonSelect.value, note.value.trim())
+      const up = mode === "in" ? Math.max(0, Number(unitPrice.value) || 0) : undefined
+      await db.addMovement(item.id, mode, q, reasonSelect.value, note.value.trim(), up)
       toast(mode === "in" ? "Stock added" : "Stock removed", "success")
       closeModal()
       ctx.refresh()
@@ -265,6 +288,13 @@ export async function openTransactionForm(ctx: ViewCtx): Promise<void> {
 
   const note = textInput("note", "", { placeholder: "Optional note" })
 
+  const unitPrice = textInput("unit_price", "0", { type: "number", min: "0", step: "0.01" })
+  const unitPriceField = field(
+    `Unit price (${ctx.settings.currency})`,
+    unitPrice,
+    "Cost per unit for this batch of stock. Used to value inventory (FIFO).",
+  )
+
   const inBtn = h<HTMLButtonElement>("button", { class: "seg seg-active", type: "button", onclick: () => setMode("in") }, ["+ Add stock"])
   const outBtn = h<HTMLButtonElement>("button", { class: "seg", type: "button", onclick: () => setMode("out") }, ["\u2212 Remove stock"])
   const segGroup = h("div", { class: "segmented" }, [inBtn, outBtn])
@@ -290,6 +320,7 @@ export async function openTransactionForm(ctx: ViewCtx): Promise<void> {
       currentLabel.append("Select a product to begin.")
     } else {
       currentLabel.append(`Current stock: ${it.quantity}${it.unit ? " " + it.unit : ""}`)
+      unitPrice.value = String(it.price || 0)
     }
     updateWarning()
   }
@@ -303,6 +334,7 @@ export async function openTransactionForm(ctx: ViewCtx): Promise<void> {
     inBtn.classList.toggle("seg-in", m === "in")
     outBtn.classList.toggle("seg-out", m === "out")
     buildReasons(m)
+    unitPriceField.style.display = m === "in" ? "" : "none"
     updateWarning()
   }
 
@@ -320,6 +352,7 @@ export async function openTransactionForm(ctx: ViewCtx): Promise<void> {
     currentLabel,
     field("Direction", segGroup),
     field("Quantity", stepper),
+    unitPriceField,
     field("Reason", reasonSelect),
     field("Note", note),
     warning,
@@ -343,7 +376,8 @@ export async function openTransactionForm(ctx: ViewCtx): Promise<void> {
     confirmBtn.disabled = true
     confirmBtn.textContent = "Saving..."
     try {
-      await db.addMovement(it.id, mode, q, reasonSelect.value, note.value.trim())
+      const up = mode === "in" ? Math.max(0, Number(unitPrice.value) || 0) : undefined
+      await db.addMovement(it.id, mode, q, reasonSelect.value, note.value.trim(), up)
       toast(mode === "in" ? "Stock added" : "Stock removed", "success")
       closeModal()
       ctx.refresh()

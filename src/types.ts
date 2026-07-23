@@ -1,5 +1,8 @@
 export type ItemType = "raw" | "finished"
 
+export const UNITS = ["kg", "pcs", "bag", "drum", "liter"] as const
+export type Unit = (typeof UNITS)[number]
+
 export interface Item {
   id: string
   name: string
@@ -29,6 +32,9 @@ export interface Movement {
   note: string | null
   created_at: string
   item_name?: string
+  unit_price?: number | null
+  remaining?: number | null
+  consumed?: string | null
 }
 
 export interface Stats {

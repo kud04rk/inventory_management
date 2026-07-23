@@ -40,7 +40,7 @@ const TYPE_LABEL: Record<ItemType, string> = {
 
 let currentView: ViewName = "dashboard"
 let stockType: ItemType = "finished"
-let settings: Settings = { currency: "$", storeName: "My Store" }
+let settings: Settings = { currency: "₹", storeName: "My Store" }
 let navButtons: HTMLButtonElement[] = []
 let typeToggleBtns: HTMLButtonElement[] = []
 let pageTitle: HTMLElement

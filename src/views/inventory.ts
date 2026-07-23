@@ -9,9 +9,10 @@ let searchState = ""
 let categoryState = ""
 
 export async function renderInventory(ctx: ViewCtx): Promise<HTMLElement> {
-  const [items, categories] = await Promise.all([
+  const [items, categories, values] = await Promise.all([
     db.getItems(searchState, categoryState, ctx.stockType),
     db.getCategories(ctx.stockType),
+    db.getItemValues(ctx.stockType),
   ])
 
   const root = h("div", { class: "view inventory-view" }, [])
@@ -81,7 +82,7 @@ export async function renderInventory(ctx: ViewCtx): Promise<HTMLElement> {
     ]),
   ])
 
-  const tbody = h("tbody", {}, items.map((it) => itemRow(it, ctx)))
+  const tbody = h("tbody", {}, items.map((it) => itemRow(it, values, ctx)))
 
   const tableWrap = h("div", { class: "table-wrap" }, [
     h("table", { class: "inv-table" }, [thead, tbody]),
@@ -91,7 +92,7 @@ export async function renderInventory(ctx: ViewCtx): Promise<HTMLElement> {
   return root
 }
 
-function itemRow(it: Item, ctx: ViewCtx): HTMLElement {
+function itemRow(it: Item, values: Record<string, number>, ctx: ViewCtx): HTMLElement {
   const low = it.reorder_level > 0 && it.quantity <= it.reorder_level
   const out = it.quantity <= 0
   const stockClass = out ? "stock-out" : low ? "stock-low" : "stock-ok"
@@ -107,7 +108,8 @@ function itemRow(it: Item, ctx: ViewCtx): HTMLElement {
   ])
 
   const priceCell = h("td", { class: "col-price", text: formatCurrency(it.price, ctx.settings.currency) })
-  const valueCell = h("td", { class: "col-value", text: formatCurrency(it.price * it.quantity, ctx.settings.currency) })
+  const value = values[it.id] ?? it.price * it.quantity
+  const valueCell = h("td", { class: "col-value", text: formatCurrency(value, ctx.settings.currency) })
 
   const actions = h("td", { class: "col-actions" }, [
     h("button", { class: "btn btn-ghost btn-sm", type: "button", onclick: () => ctx.openStockModal(it) }, ["Stock"]),
@@ -135,7 +137,10 @@ async function confirmDelete(it: Item, ctx: ViewCtx): Promise<void> {
 
 export async function exportStockCsv(ctx: ViewCtx): Promise<void> {
   try {
-    const items = await db.getItems("", "", ctx.stockType)
+    const [items, values] = await Promise.all([
+      db.getItems("", "", ctx.stockType),
+      db.getItemValues(ctx.stockType),
+    ])
     if (items.length === 0) {
       toast("Nothing to export for this stock type", "error")
       return
@@ -159,7 +164,7 @@ export async function exportStockCsv(ctx: ViewCtx): Promise<void> {
         it.quantity,
         it.unit ?? "",
         it.price.toFixed(2),
-        (it.price * it.quantity).toFixed(2),
+        (values[it.id] ?? it.price * it.quantity).toFixed(2),
         it.reorder_level,
         status,
         it.location ?? "",
@@ -218,7 +223,7 @@ export async function importStockCsv(ctx: ViewCtx, input: HTMLInputElement): Pro
       }
       const created = await db.createItem({ ...inputItem, quantity: 0 })
       if (quantity > 0) {
-        await db.addMovement(created.id, "in", quantity, "Opening balance", "")
+        await db.addMovement(created.id, "in", quantity, "Opening balance", "", inputItem.price)
       }
       imported++
     }

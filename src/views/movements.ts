@@ -1,6 +1,6 @@
 import { db } from "../db"
 import type { Movement, ViewCtx } from "../types"
-import { formatDateTime } from "../format"
+import { formatCurrency, formatDateTime } from "../format"
 import { h, toast } from "../ui"
 import { confirmDialog } from "../modal"
 
@@ -44,11 +44,14 @@ export async function renderMovements(ctx: ViewCtx): Promise<HTMLElement> {
 
   const list = h("div", { class: "card-list" }, movements.map((m) => {
     const isIn = m.type === "in"
+    const priceBit = isIn && m.unit_price != null
+      ? ` \u00b7 ${formatCurrency(m.unit_price, ctx.settings.currency)}/unit`
+      : ""
     return h("div", { class: "list-row" }, [
       h("div", { class: `move-icon ${isIn ? "move-in" : "move-out"}`, text: isIn ? "\u2191" : "\u2193" }),
       h("div", { class: "list-main" }, [
         h("div", { class: "list-title", text: m.item_name ?? "Unknown item" }),
-        h("div", { class: "list-sub", text: `${isIn ? "Added" : "Removed"} ${m.quantity} \u00b7 ${m.reason ?? "No reason"}${m.note ? " \u00b7 " + m.note : ""}` }),
+        h("div", { class: "list-sub", text: `${isIn ? "Added" : "Removed"} ${m.quantity} \u00b7 ${m.reason ?? "No reason"}${priceBit}${m.note ? " \u00b7 " + m.note : ""}` }),
       ]),
       h("div", { class: "list-end" }, [
         h("span", { class: `pill ${isIn ? "pill-green" : "pill-red"}`, text: `${isIn ? "+" : "\u2212"}${m.quantity}` }),

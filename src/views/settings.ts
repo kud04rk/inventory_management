@@ -23,7 +23,7 @@ export async function renderSettings(ctx: ViewCtx): Promise<HTMLElement> {
     saveBtn.textContent = "Saving..."
     try {
       await db.setSetting("store_name", storeName.value.trim() || "My Store")
-      await db.setSetting("currency", currency.value.trim() || "$")
+      await db.setSetting("currency", currency.value.trim() || "₹")
       toast("Settings saved", "success")
       ctx.refresh()
     } catch (err) {

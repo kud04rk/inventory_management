@@ -46,10 +46,12 @@ interface Backend {
     quantity: number,
     reason: string,
     note: string,
+    unitPrice?: number,
   ): Promise<void>
   deleteMovement(id: string): Promise<void>
   getMovements(limit: number, itemId: string | null): Promise<Movement[]>
   getStats(type: ItemType | null): Promise<Stats>
+  getItemValues(type: ItemType | null): Promise<Record<string, number>>
   getSettings(): Promise<Settings>
   setSetting(key: string, value: string): Promise<void>
   exportAll(): Promise<string>
@@ -144,9 +146,10 @@ const tauriBackend: Backend = {
     await pool!.execute("DELETE FROM items WHERE id = ?", [id])
   },
 
-  async addMovement(itemId, type, quantity, reason, note) {
+  async addMovement(itemId, type, quantity, reason, note, unitPrice) {
     const now = new Date().toISOString()
     let actual = quantity
+    let consumedJson: string | null = null
     if (type === "out") {
       const rows = await pool!.select<{ quantity: number }[]>(
         "SELECT quantity FROM items WHERE id = ?",
@@ -154,6 +157,23 @@ const tauriBackend: Backend = {
       )
       const current = rows[0]?.quantity ?? 0
       actual = Math.min(quantity, current)
+      const batches = await pool!.select<{ id: string; remaining: number }[]>(
+        "SELECT id, remaining FROM movements WHERE item_id = ? AND type = 'in' AND remaining > 0 ORDER BY created_at ASC, id ASC",
+        [itemId],
+      )
+      const consumed: { id: string; qty: number }[] = []
+      let toRemove = actual
+      for (const b of batches) {
+        if (toRemove <= 0) break
+        const take = Math.min(b.remaining, toRemove)
+        await pool!.execute(
+          "UPDATE movements SET remaining = remaining - ? WHERE id = ?",
+          [take, b.id],
+        )
+        consumed.push({ id: b.id, qty: take })
+        toRemove -= take
+      }
+      if (consumed.length) consumedJson = JSON.stringify(consumed)
     }
     const delta = type === "in" ? actual : -actual
     await pool!.execute(
@@ -161,24 +181,63 @@ const tauriBackend: Backend = {
       [delta, now, itemId],
     )
     await pool!.execute(
-      `INSERT INTO movements (id, item_id, type, quantity, reason, note, created_at)
-       VALUES (?,?,?,?,?,?,?)`,
-      [uid(), itemId, type, actual, reason || null, note || null, now],
+      `INSERT INTO movements (id, item_id, type, quantity, reason, note, created_at, unit_price, remaining, consumed)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      [
+        uid(),
+        itemId,
+        type,
+        actual,
+        reason || null,
+        note || null,
+        now,
+        type === "in" ? (unitPrice ?? 0) : null,
+        type === "in" ? actual : null,
+        consumedJson,
+      ],
     )
   },
 
   async deleteMovement(id) {
     const rows = await pool!.select<
-      { type: MovementType; quantity: number; item_id: string }[]
-    >("SELECT type, quantity, item_id FROM movements WHERE id = ?", [id])
+      { type: MovementType; quantity: number; item_id: string; consumed: string | null }[]
+    >("SELECT type, quantity, item_id, consumed FROM movements WHERE id = ?", [id])
     const mv = rows[0]
     if (!mv) return
-    const delta = mv.type === "in" ? -mv.quantity : mv.quantity
     const now = new Date().toISOString()
-    await pool!.execute(
-      "UPDATE items SET quantity = quantity + ?, updated_at = ? WHERE id = ?",
-      [delta, now, mv.item_id],
-    )
+    if (mv.type === "out" && mv.consumed) {
+      const consumed = JSON.parse(mv.consumed) as { id: string; qty: number }[]
+      for (const c of consumed) {
+        await pool!.execute(
+          "UPDATE movements SET remaining = remaining + ? WHERE id = ?",
+          [c.qty, c.id],
+        )
+      }
+      await pool!.execute(
+        "UPDATE items SET quantity = quantity + ?, updated_at = ? WHERE id = ?",
+        [mv.quantity, now, mv.item_id],
+      )
+    } else if (mv.type === "in") {
+      const b = await pool!.select<{ remaining: number | null }[]>(
+        "SELECT remaining FROM movements WHERE id = ?",
+        [id],
+      )
+      const rem = b[0]?.remaining ?? 0
+      const onHand = await pool!.select<{ quantity: number }[]>(
+        "SELECT quantity FROM items WHERE id = ?",
+        [mv.item_id],
+      )
+      const removeQty = Math.min(rem, onHand[0]?.quantity ?? 0)
+      await pool!.execute(
+        "UPDATE items SET quantity = quantity - ?, updated_at = ? WHERE id = ?",
+        [removeQty, now, mv.item_id],
+      )
+    } else {
+      await pool!.execute(
+        "UPDATE items SET quantity = quantity + ?, updated_at = ? WHERE id = ?",
+        [mv.quantity, now, mv.item_id],
+      )
+    }
     await pool!.execute("DELETE FROM movements WHERE id = ?", [id])
   },
 
@@ -199,12 +258,12 @@ const tauriBackend: Backend = {
 
   async getStats(type) {
     const where = type ? "WHERE type = ?" : ""
+    const valWhere = type ? "WHERE i.type = ?" : ""
     const params = type ? [type] : []
     const rows = await pool!.select<
       {
         totalItems: number
         totalUnits: number
-        totalValue: number
         lowStockCount: number
         categories: number
       }[]
@@ -212,26 +271,48 @@ const tauriBackend: Backend = {
       `SELECT
          COUNT(*) AS totalItems,
          COALESCE(SUM(quantity),0) AS totalUnits,
-         COALESCE(SUM(quantity*price),0) AS totalValue,
          COALESCE(SUM(CASE WHEN reorder_level > 0 AND quantity <= reorder_level THEN 1 ELSE 0 END),0) AS lowStockCount,
          COUNT(DISTINCT CASE WHEN category IS NOT NULL AND category <> '' THEN category END) AS categories
        FROM items ${where}`,
       params,
     )
+    const valRows = await pool!.select<{ totalValue: number }[]>(
+      `SELECT COALESCE(SUM(m.remaining * COALESCE(m.unit_price, i.price)),0) AS totalValue
+       FROM items i
+       JOIN movements m ON m.item_id = i.id AND m.type = 'in' AND m.remaining > 0
+       ${valWhere}`,
+      params,
+    )
     const r = rows[0] ?? {
       totalItems: 0,
       totalUnits: 0,
-      totalValue: 0,
       lowStockCount: 0,
       categories: 0,
     }
     return {
       totalItems: Number(r.totalItems) || 0,
       totalUnits: Number(r.totalUnits) || 0,
-      totalValue: Number(r.totalValue) || 0,
+      totalValue: Number(valRows[0]?.totalValue) || 0,
       lowStockCount: Number(r.lowStockCount) || 0,
       categories: Number(r.categories) || 0,
     }
+  },
+
+  async getItemValues(type) {
+    const where = type ? "WHERE i.type = ?" : ""
+    const params = type ? [type] : []
+    const rows = await pool!.select<{ item_id: string; value: number }[]>(
+      `SELECT i.id AS item_id,
+         COALESCE(SUM(m.remaining * COALESCE(m.unit_price, i.price)),0) AS value
+       FROM items i
+       LEFT JOIN movements m ON m.item_id = i.id AND m.type = 'in' AND m.remaining > 0
+       ${where}
+       GROUP BY i.id`,
+      params,
+    )
+    const map: Record<string, number> = {}
+    for (const r of rows) map[r.item_id] = Number(r.value) || 0
+    return map
   },
 
   async getSettings() {
@@ -241,7 +322,7 @@ const tauriBackend: Backend = {
     const map: Record<string, string> = {}
     for (const r of rows) map[r.key] = r.value
     return {
-      currency: map["currency"] ?? "$",
+      currency: map["currency"] ?? "₹",
       storeName: map["store_name"] ?? "My Store",
     }
   },
@@ -300,7 +381,7 @@ const tauriBackend: Backend = {
     }
     for (const mv of data.movements ?? []) {
       await pool!.execute(
-        `INSERT INTO movements (id,item_id,type,quantity,reason,note,created_at) VALUES (?,?,?,?,?,?,?)`,
+        `INSERT INTO movements (id,item_id,type,quantity,reason,note,created_at,unit_price,remaining,consumed) VALUES (?,?,?,?,?,?,?,?,?,?)`,
         [
           mv.id,
           mv.item_id,
@@ -309,6 +390,9 @@ const tauriBackend: Backend = {
           mv.reason,
           mv.note,
           mv.created_at,
+          mv.unit_price ?? null,
+          mv.remaining ?? null,
+          mv.consumed ?? null,
         ],
       )
     }
@@ -347,19 +431,32 @@ function mockSeed(): void {
   if (localStorage.getItem(KEYS.seeded)) return
   const now = Date.now()
   const items: Item[] = [
-    mkItem("Rice 5kg Bag", "finished", "RICE-5KG", "Groceries", 24, "bag", 8.5, "Shelf A1", 10, now),
-    mkItem("Cooking Oil 1L", "finished", "OIL-1L", "Groceries", 4, "bottle", 3.2, "Shelf A2", 8, now),
-    mkItem("Notebook A5", "finished", "NB-A5", "Stationery", 52, "pcs", 1.2, "Drawer B1", 20, now),
-    mkItem("Ballpoint Pen", "finished", "PEN-BLUE", "Stationery", 3, "pcs", 0.5, "Drawer B2", 15, now),
-    mkItem("Bottled Water 500ml", "finished", "WATER-500", "Beverages", 120, "bottle", 0.4, "Cooler C1", 24, now),
-    mkItem("Raw Flour 25kg", "raw", "FLR-25", "Ingredients", 40, "sack", 12.0, "Store Room", 12, now),
-    mkItem("Sugar 50kg", "raw", "SUG-50", "Ingredients", 2, "sack", 35.0, "Store Room", 5, now),
-    mkItem("Packaging Box", "raw", "PKG-BOX", "Packaging", 300, "pcs", 0.2, "Warehouse", 100, now),
+    mkItem("Rice 5kg Bag", "finished", "RICE-5KG", "Groceries", 24, "bag", 450, "Shelf A1", 10, now),
+    mkItem("Cooking Oil 1L", "finished", "OIL-1L", "Groceries", 4, "pcs", 180, "Shelf A2", 8, now),
+    mkItem("Notebook A5", "finished", "NB-A5", "Stationery", 52, "pcs", 45, "Drawer B1", 20, now),
+    mkItem("Ballpoint Pen", "finished", "PEN-BLUE", "Stationery", 3, "pcs", 10, "Drawer B2", 15, now),
+    mkItem("Bottled Water 500ml", "finished", "WATER-500", "Beverages", 120, "pcs", 15, "Cooler C1", 24, now),
+    mkItem("Raw Flour 25kg", "raw", "FLR-25", "Ingredients", 40, "bag", 1100, "Store Room", 12, now),
+    mkItem("Sugar 50kg", "raw", "SUG-50", "Ingredients", 2, "bag", 2600, "Store Room", 5, now),
+    mkItem("Packaging Box", "raw", "PKG-BOX", "Packaging", 300, "pcs", 6, "Warehouse", 100, now),
   ]
+  const movements: Movement[] = items.map((it) => ({
+    id: uid(),
+    item_id: it.id,
+    type: "in",
+    quantity: it.quantity,
+    reason: "Opening balance",
+    note: null,
+    created_at: it.created_at,
+    item_name: it.name,
+    unit_price: it.price,
+    remaining: it.quantity,
+    consumed: null,
+  }))
   lsSave(KEYS.items, items)
-  lsSave(KEYS.movements, [])
+  lsSave(KEYS.movements, movements)
   lsSave(KEYS.settings, [
-    { key: "currency", value: "$" },
+    { key: "currency", value: "₹" },
     { key: "store_name", value: "My Store" },
   ])
   localStorage.setItem(KEYS.seeded, "1")
@@ -449,16 +546,41 @@ const mockBackend: Backend = {
     lsSave(KEYS.movements, movements)
   },
 
-  async addMovement(itemId, type, quantity, reason, note) {
+  async addMovement(itemId, type, quantity, reason, note, unitPrice) {
     const items = lsLoad<Item[]>(KEYS.items, [])
     const idx = items.findIndex((i) => i.id === itemId)
     if (idx < 0) return
+    const movements = lsLoad<Movement[]>(KEYS.movements, [])
     let actual = quantity
-    if (type === "out") actual = Math.min(quantity, items[idx].quantity)
+    let consumedJson: string | null = null
+    if (type === "out") {
+      actual = Math.min(quantity, items[idx].quantity)
+      const batches = movements
+        .filter((m) => m.item_id === itemId && m.type === "in" && (m.remaining ?? 0) > 0)
+        .sort((a, b) =>
+          a.created_at < b.created_at
+            ? -1
+            : a.created_at > b.created_at
+              ? 1
+              : a.id < b.id
+                ? -1
+                : 1,
+        )
+      const consumed: { id: string; qty: number }[] = []
+      let toRemove = actual
+      for (const b of batches) {
+        if (toRemove <= 0) break
+        const rem = b.remaining ?? 0
+        const take = Math.min(rem, toRemove)
+        b.remaining = rem - take
+        consumed.push({ id: b.id, qty: take })
+        toRemove -= take
+      }
+      if (consumed.length) consumedJson = JSON.stringify(consumed)
+    }
     items[idx].quantity += type === "in" ? actual : -actual
     items[idx].updated_at = new Date().toISOString()
     lsSave(KEYS.items, items)
-    const movements = lsLoad<Movement[]>(KEYS.movements, [])
     const item = items[idx]
     movements.push({
       id: uid(),
@@ -469,6 +591,9 @@ const mockBackend: Backend = {
       note: note || null,
       created_at: new Date().toISOString(),
       item_name: item.name,
+      unit_price: type === "in" ? (unitPrice ?? 0) : null,
+      remaining: type === "in" ? actual : null,
+      consumed: type === "out" ? consumedJson : null,
     })
     lsSave(KEYS.movements, movements)
   },
@@ -480,8 +605,19 @@ const mockBackend: Backend = {
     const items = lsLoad<Item[]>(KEYS.items, [])
     const idx = items.findIndex((i) => i.id === mv.item_id)
     if (idx >= 0) {
-      const delta = mv.type === "in" ? -mv.quantity : mv.quantity
-      items[idx].quantity += delta
+      if (mv.type === "out" && mv.consumed) {
+        const consumed = JSON.parse(mv.consumed) as { id: string; qty: number }[]
+        for (const c of consumed) {
+          const bm = movements.find((m) => m.id === c.id)
+          if (bm) bm.remaining = (bm.remaining ?? 0) + c.qty
+        }
+        items[idx].quantity += mv.quantity
+      } else if (mv.type === "in") {
+        const removeQty = Math.min(mv.remaining ?? 0, items[idx].quantity)
+        items[idx].quantity -= removeQty
+      } else {
+        items[idx].quantity += mv.quantity
+      }
       items[idx].updated_at = new Date().toISOString()
       lsSave(KEYS.items, items)
     }
@@ -507,15 +643,23 @@ const mockBackend: Backend = {
   async getStats(type) {
     let items = lsLoad<Item[]>(KEYS.items, []).map(normItem)
     if (type) items = items.filter((i) => i.type === type)
+    const movements = lsLoad<Movement[]>(KEYS.movements, [])
+    const ids = new Set(items.map((i) => i.id))
+    const priceMap = new Map(items.map((i) => [i.id, i.price]))
     const cats = new Set<string>()
     let totalUnits = 0
-    let totalValue = 0
     let low = 0
+    let totalValue = 0
     for (const i of items) {
       totalUnits += i.quantity
-      totalValue += i.quantity * i.price
       if (i.category) cats.add(i.category)
       if (i.reorder_level > 0 && i.quantity <= i.reorder_level) low++
+    }
+    for (const m of movements) {
+      if (m.type === "in" && (m.remaining ?? 0) > 0 && ids.has(m.item_id)) {
+        const price = m.unit_price ?? priceMap.get(m.item_id) ?? 0
+        totalValue += (m.remaining ?? 0) * price
+      }
     }
     return {
       totalItems: items.length,
@@ -526,11 +670,27 @@ const mockBackend: Backend = {
     }
   },
 
+  async getItemValues(type) {
+    let items = lsLoad<Item[]>(KEYS.items, []).map(normItem)
+    if (type) items = items.filter((i) => i.type === type)
+    const movements = lsLoad<Movement[]>(KEYS.movements, [])
+    const priceMap = new Map(items.map((i) => [i.id, i.price]))
+    const map: Record<string, number> = {}
+    for (const i of items) map[i.id] = 0
+    for (const m of movements) {
+      if (m.type === "in" && (m.remaining ?? 0) > 0 && m.item_id in map) {
+        const price = m.unit_price ?? priceMap.get(m.item_id) ?? 0
+        map[m.item_id] += (m.remaining ?? 0) * price
+      }
+    }
+    return map
+  },
+
   async getSettings() {
     const rows = lsLoad<{ key: string; value: string }[]>(KEYS.settings, [])
     const map: Record<string, string> = {}
     for (const r of rows) map[r.key] = r.value
-    return { currency: map["currency"] ?? "$", storeName: map["store_name"] ?? "My Store" }
+    return { currency: map["currency"] ?? "₹", storeName: map["store_name"] ?? "My Store" }
   },
 
   async setSetting(key, value) {
