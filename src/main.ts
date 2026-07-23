@@ -161,6 +161,12 @@ function updateNavActive(): void {
   }
 }
 
+function errMsg(err: unknown): string {
+  if (err instanceof Error) return err.message
+  if (typeof err === "string") return err
+  return String(err)
+}
+
 async function renderView(view: ViewName): Promise<void> {
   clear(content)
   content.append(h("div", { class: "loading", text: "Loading..." }))
@@ -177,7 +183,7 @@ async function renderView(view: ViewName): Promise<void> {
   } catch (err) {
     clear(content)
     content.append(
-      h("div", { class: "empty-card big", text: "Something went wrong: " + (err as Error).message }),
+      h("div", { class: "empty-card big", text: "Something went wrong: " + errMsg(err) }),
     )
   }
 }

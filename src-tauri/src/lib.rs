@@ -20,6 +20,12 @@ fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0003_item_type.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 4,
+            description: "FIFO batch pricing columns",
+            sql: include_str!("../migrations/0004_fifo_pricing.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
