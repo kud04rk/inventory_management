@@ -5,5 +5,5 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 
 INSERT OR IGNORE INTO settings(key, value) VALUES
-    ('currency', '₹'),
+    ('currency', '$'),
     ('store_name', 'My Store');
