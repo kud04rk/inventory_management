@@ -251,7 +251,7 @@ export async function openTransactionForm(ctx: ViewCtx): Promise<void> {
   const qty = textInput("qty", "1", { type: "number", min: "1", step: "1" })
   qty.style.fontSize = "1.6rem"
   qty.style.textAlign = "center"
-  qty.style.width = "5rem"
+  qty.style.width = "10rem"
 
   const reasonSelect = document.createElement("select")
   reasonSelect.className = "input"

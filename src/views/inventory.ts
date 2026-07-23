@@ -1,8 +1,8 @@
 import { db } from "../db"
-import type { Item, ViewCtx } from "../types"
+import type { Item, ItemInput, ItemType, ViewCtx } from "../types"
 import { formatCurrency } from "../format"
 import { h, toast } from "../ui"
-import { downloadCsv } from "../csv"
+import { downloadCsv, parseCsv } from "../csv"
 
 let searchState = ""
 let categoryState = ""
@@ -44,13 +44,23 @@ export async function renderInventory(ctx: ViewCtx): Promise<HTMLElement> {
     " Export CSV",
   ])
 
+  const importFile = document.createElement("input")
+  importFile.type = "file"
+  importFile.accept = ".csv,text/csv"
+  importFile.style.display = "none"
+  importFile.addEventListener("change", () => { void importStockCsv(ctx, importFile) })
+  const importBtn = h("button", { class: "btn btn-secondary", type: "button", onclick: () => importFile.click() }, [
+    h("span", { html: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>' }),
+    " Import CSV",
+  ])
+
   const addBtn = h("button", { class: "btn btn-primary", type: "button", onclick: () => ctx.openItemForm() }, [
     h("span", { class: "plus", text: "+" }),
     " Add item",
   ])
 
-  const toolbar = h("div", { class: "toolbar" }, [search, catSelect, csvBtn, addBtn])
-  root.append(toolbar)
+  const toolbar = h("div", { class: "toolbar" }, [search, catSelect, csvBtn, importBtn, addBtn])
+  root.append(toolbar, importFile)
 
   // Table
   if (items.length === 0) {
@@ -156,5 +166,60 @@ export async function exportStockCsv(ctx: ViewCtx): Promise<void> {
     toast("Stock statement exported", "success")
   } catch (err) {
     toast("Export failed: " + (err as Error).message, "error")
+  }
+}
+
+export async function importStockCsv(ctx: ViewCtx, input: HTMLInputElement): Promise<void> {
+  const file = input.files?.[0]
+  if (!file) return
+  input.value = ""
+  try {
+    const text = await file.text()
+    const rows = parseCsv(text)
+    if (rows.length < 2) {
+      toast("CSV is empty or has no data rows", "error")
+      return
+    }
+    const headers = rows[0].map((h) => h.trim().toLowerCase())
+    const col = (name: string): number => headers.indexOf(name)
+    const idxName = col("name")
+    if (idxName < 0) {
+      toast('CSV must have a "Name" column', "error")
+      return
+    }
+    const at = (cells: string[], i: number): string => (i >= 0 ? (cells[i] ?? "").trim() : "")
+    let imported = 0
+    for (const cells of rows.slice(1)) {
+      const name = at(cells, idxName)
+      if (!name) continue
+      const typeRaw = at(cells, col("type")).toLowerCase()
+      const type: ItemType = typeRaw.startsWith("raw")
+        ? "raw"
+        : typeRaw.startsWith("finished")
+          ? "finished"
+          : ctx.stockType
+      const quantity = Math.max(0, Math.floor(Number(at(cells, col("quantity"))) || 0))
+      const inputItem: ItemInput = {
+        name,
+        type,
+        sku: at(cells, col("sku")),
+        category: at(cells, col("category")),
+        quantity,
+        unit: at(cells, col("unit")),
+        price: Math.max(0, Number(at(cells, col("unit price"))) || 0),
+        location: at(cells, col("location")),
+        reorder_level: Math.max(0, Math.floor(Number(at(cells, col("reorder level"))) || 0)),
+        notes: "",
+      }
+      const created = await db.createItem({ ...inputItem, quantity: 0 })
+      if (quantity > 0) {
+        await db.addMovement(created.id, "in", quantity, "Opening balance", "")
+      }
+      imported++
+    }
+    toast(`Imported ${imported} item${imported === 1 ? "" : "s"}`, "success")
+    ctx.refresh()
+  } catch (err) {
+    toast("Import failed: " + (err as Error).message, "error")
   }
 }

@@ -1,3 +1,45 @@
+export function parseCsv(text: string): string[][] {
+  const out: string[][] = []
+  let row: string[] = []
+  let field = ""
+  let inQuotes = false
+  let i = 0
+  if (text.charCodeAt(0) === 0xfeff) i = 1
+  for (; i < text.length; i++) {
+    const c = text[i]
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') {
+          field += '"'
+          i++
+        } else {
+          inQuotes = false
+        }
+      } else {
+        field += c
+      }
+    } else if (c === '"') {
+      inQuotes = true
+    } else if (c === ",") {
+      row.push(field)
+      field = ""
+    } else if (c === "\n" || c === "\r") {
+      row.push(field)
+      field = ""
+      out.push(row)
+      row = []
+      if (c === "\r" && text[i + 1] === "\n") i++
+    } else {
+      field += c
+    }
+  }
+  if (field.length > 0 || row.length > 0) {
+    row.push(field)
+    out.push(row)
+  }
+  return out.filter((r) => r.some((c) => c.trim() !== ""))
+}
+
 export function downloadCsv(
   filename: string,
   headers: string[],
