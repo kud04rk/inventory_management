@@ -13,4 +13,4 @@ UPDATE movements SET unit_price = (
   WHERE type = 'in' AND unit_price IS NULL;
 
 -- Switch the legacy default currency to Indian Rupees (custom values are left as-is).
-UPDATE settings SET value = '₹' WHERE key = 'currency' AND value = '$';
+UPDATE settings SET value = '₹' WHERE key = 'currency' AND value = '₹';
