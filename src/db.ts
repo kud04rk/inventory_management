@@ -97,7 +97,7 @@ const tauriBackend: Backend = {
     const now = new Date().toISOString()
     await pool!.execute(
       `INSERT INTO items (id, name, type, sku, category, quantity, unit, price, location, reorder_level, notes, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         id,
         input.name,
