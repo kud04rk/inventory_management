@@ -1,7 +1,8 @@
 import { db } from "../db"
-import type { ViewCtx } from "../types"
+import type { Movement, ViewCtx } from "../types"
 import { formatDateTime } from "../format"
-import { h } from "../ui"
+import { h, toast } from "../ui"
+import { confirmDialog } from "../modal"
 
 type Filter = "all" | "in" | "out"
 let filterState: Filter = "all"
@@ -52,6 +53,7 @@ export async function renderMovements(ctx: ViewCtx): Promise<HTMLElement> {
       h("div", { class: "list-end" }, [
         h("span", { class: `pill ${isIn ? "pill-green" : "pill-red"}`, text: `${isIn ? "+" : "\u2212"}${m.quantity}` }),
         h("div", { class: "list-date", text: formatDateTime(m.created_at) }),
+        h("button", { class: "btn btn-danger-ghost btn-sm", type: "button", onclick: () => confirmDeleteMovement(m, ctx) }, ["Undo"]),
       ]),
     ])
   }))
@@ -65,4 +67,20 @@ export async function renderMovements(ctx: ViewCtx): Promise<HTMLElement> {
     ]),
   )
   return root
+}
+
+async function confirmDeleteMovement(m: Movement, ctx: ViewCtx): Promise<void> {
+  const verb = m.type === "in" ? "Added" : "Removed"
+  const ok = await confirmDialog(
+    `Undo this transaction? ${verb} ${m.quantity} for "${m.item_name ?? "this item"}". Stock will be adjusted back to its previous level.`,
+    { title: "Undo transaction", confirmText: "Undo", danger: true },
+  )
+  if (!ok) return
+  try {
+    await db.deleteMovement(m.id)
+    toast("Transaction undone", "success")
+    ctx.refresh()
+  } catch (err) {
+    toast("Could not undo: " + (err as Error).message, "error")
+  }
 }

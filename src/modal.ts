@@ -55,3 +55,34 @@ export function modalBody(children: (Node | string)[]): HTMLElement {
   }
   return body
 }
+
+export function confirmDialog(
+  message: string,
+  opts: { title?: string; confirmText?: string; danger?: boolean } = {},
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false
+    const done = (result: boolean) => {
+      if (settled) return
+      settled = true
+      resolve(result)
+      closeModal()
+    }
+    const body = h("div", { class: "stack" }, [
+      h("p", { class: "muted", text: message }),
+      h("div", { class: "form-actions" }, [
+        h("button", { class: "btn btn-ghost", type: "button", onclick: () => done(false) }, ["Cancel"]),
+        h(
+          "button",
+          {
+            class: opts.danger ? "btn btn-danger" : "btn btn-primary",
+            type: "button",
+            onclick: () => done(true),
+          },
+          [opts.confirmText ?? "Confirm"],
+        ),
+      ]),
+    ])
+    openModal(opts.title ?? "Please confirm", body, { onClose: () => done(false) })
+  })
+}

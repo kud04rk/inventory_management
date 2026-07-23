@@ -2,6 +2,7 @@ import { db } from "../db"
 import type { Item, ItemInput, ItemType, ViewCtx } from "../types"
 import { formatCurrency } from "../format"
 import { h, toast } from "../ui"
+import { confirmDialog } from "../modal"
 import { downloadCsv, parseCsv } from "../csv"
 
 let searchState = ""
@@ -118,7 +119,11 @@ function itemRow(it: Item, ctx: ViewCtx): HTMLElement {
 }
 
 async function confirmDelete(it: Item, ctx: ViewCtx): Promise<void> {
-  if (!confirm(`Delete "${it.name}"?\nThis also removes its stock history. This cannot be undone.`)) return
+  const ok = await confirmDialog(
+    `Delete "${it.name}"? This also removes its stock history. This cannot be undone.`,
+    { title: "Delete item", confirmText: "Delete", danger: true },
+  )
+  if (!ok) return
   try {
     await db.deleteItem(it.id)
     toast("Item deleted", "success")

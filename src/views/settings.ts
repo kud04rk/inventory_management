@@ -1,6 +1,7 @@
 import { db, isPreview } from "../db"
 import type { ViewCtx } from "../types"
 import { h, toast } from "../ui"
+import { confirmDialog } from "../modal"
 import { formatDateTime } from "../format"
 
 export async function renderSettings(ctx: ViewCtx): Promise<HTMLElement> {
@@ -58,7 +59,11 @@ export async function renderSettings(ctx: ViewCtx): Promise<HTMLElement> {
   fileInput.addEventListener("change", async () => {
     const file = fileInput.files?.[0]
     if (!file) return
-    if (!confirm("Importing will REPLACE all current data with the backup. Continue?")) {
+    const ok = await confirmDialog(
+      "Importing will REPLACE all current data with the backup. Continue?",
+      { title: "Restore backup", confirmText: "Replace data", danger: true },
+    )
+    if (!ok) {
       fileInput.value = ""
       return
     }
@@ -78,7 +83,11 @@ export async function renderSettings(ctx: ViewCtx): Promise<HTMLElement> {
   // Reset
   const resetBtn = h("button", { class: "btn btn-danger", type: "button", text: "Delete all data" })
   resetBtn.addEventListener("click", async () => {
-    if (!confirm("This permanently deletes ALL items and stock history. Settings are kept. This cannot be undone. Continue?")) return
+    const ok = await confirmDialog(
+      "This permanently deletes ALL items and stock history. Settings are kept. This cannot be undone. Continue?",
+      { title: "Delete all data", confirmText: "Delete everything", danger: true },
+    )
+    if (!ok) return
     try {
       const items = await db.getItems("", "", null)
       for (const it of items) await db.deleteItem(it.id)

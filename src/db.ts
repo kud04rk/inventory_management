@@ -47,6 +47,7 @@ interface Backend {
     reason: string,
     note: string,
   ): Promise<void>
+  deleteMovement(id: string): Promise<void>
   getMovements(limit: number, itemId: string | null): Promise<Movement[]>
   getStats(type: ItemType | null): Promise<Stats>
   getSettings(): Promise<Settings>
@@ -164,6 +165,21 @@ const tauriBackend: Backend = {
        VALUES (?,?,?,?,?,?,?)`,
       [uid(), itemId, type, actual, reason || null, note || null, now],
     )
+  },
+
+  async deleteMovement(id) {
+    const rows = await pool!.select<
+      { type: MovementType; quantity: number; item_id: string }[]
+    >("SELECT type, quantity, item_id FROM movements WHERE id = ?", [id])
+    const mv = rows[0]
+    if (!mv) return
+    const delta = mv.type === "in" ? -mv.quantity : mv.quantity
+    const now = new Date().toISOString()
+    await pool!.execute(
+      "UPDATE items SET quantity = quantity + ?, updated_at = ? WHERE id = ?",
+      [delta, now, mv.item_id],
+    )
+    await pool!.execute("DELETE FROM movements WHERE id = ?", [id])
   },
 
   async getMovements(limit, itemId) {
@@ -455,6 +471,24 @@ const mockBackend: Backend = {
       item_name: item.name,
     })
     lsSave(KEYS.movements, movements)
+  },
+
+  async deleteMovement(id) {
+    const movements = lsLoad<Movement[]>(KEYS.movements, [])
+    const mv = movements.find((m) => m.id === id)
+    if (!mv) return
+    const items = lsLoad<Item[]>(KEYS.items, [])
+    const idx = items.findIndex((i) => i.id === mv.item_id)
+    if (idx >= 0) {
+      const delta = mv.type === "in" ? -mv.quantity : mv.quantity
+      items[idx].quantity += delta
+      items[idx].updated_at = new Date().toISOString()
+      lsSave(KEYS.items, items)
+    }
+    lsSave(
+      KEYS.movements,
+      movements.filter((m) => m.id !== id),
+    )
   },
 
   async getMovements(limit, itemId) {
