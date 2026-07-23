@@ -107,8 +107,9 @@ function itemRow(it: Item, values: Record<string, number>, ctx: ViewCtx): HTMLEl
     it.unit ? h("span", { class: "stock-unit", text: " " + it.unit }) : "",
   ])
 
-  const priceCell = h("td", { class: "col-price", text: formatCurrency(it.price, ctx.settings.currency) })
   const value = values[it.id] ?? it.price * it.quantity
+  const unitPrice = it.quantity > 0 ? value / it.quantity : it.price
+  const priceCell = h("td", { class: "col-price", text: formatCurrency(unitPrice, ctx.settings.currency) })
   const valueCell = h("td", { class: "col-value", text: formatCurrency(value, ctx.settings.currency) })
 
   const actions = h("td", { class: "col-actions" }, [
@@ -156,6 +157,8 @@ export async function exportStockCsv(ctx: ViewCtx): Promise<void> {
           : it.reorder_level > 0 && it.quantity <= it.reorder_level
             ? "Low stock"
             : "OK"
+      const value = values[it.id] ?? it.price * it.quantity
+      const unitPrice = it.quantity > 0 ? value / it.quantity : it.price
       return [
         it.name,
         it.type === "raw" ? "Raw material" : "Finished good",
@@ -163,8 +166,8 @@ export async function exportStockCsv(ctx: ViewCtx): Promise<void> {
         it.category ?? "",
         it.quantity,
         it.unit ?? "",
-        it.price.toFixed(2),
-        (values[it.id] ?? it.price * it.quantity).toFixed(2),
+        unitPrice.toFixed(2),
+        value.toFixed(2),
         it.reorder_level,
         status,
         it.location ?? "",

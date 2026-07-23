@@ -279,7 +279,7 @@ export async function openTransactionForm(ctx: ViewCtx): Promise<void> {
   const reasonSelect = document.createElement("select")
   reasonSelect.className = "input"
   const buildReasons = (m: "in" | "out") => {
-    const list = m === "in" ? ["Purchase", "Return", "Stocktake adjustment", "Other"] : ["Sale", "Damaged", "Expired", "Stocktake adjustment", "Other"]
+    const list = m === "in" ? ["Purchase", "Return", "Stocktake adjustment", "Other"] : ["Sale", "Sent to production", "Damaged", "Expired", "Stocktake adjustment", "Other"]
     reasonSelect.innerHTML = ""
     reasonSelect.append(h("option", { value: "" }, ["(optional) Reason"]))
     for (const r of list) reasonSelect.append(h("option", { value: r }, [r]))
@@ -295,8 +295,8 @@ export async function openTransactionForm(ctx: ViewCtx): Promise<void> {
     "Cost per unit for this batch of stock. Used to value inventory (FIFO).",
   )
 
-  const inBtn = h<HTMLButtonElement>("button", { class: "seg seg-active", type: "button", onclick: () => setMode("in") }, ["+ Add stock"])
-  const outBtn = h<HTMLButtonElement>("button", { class: "seg", type: "button", onclick: () => setMode("out") }, ["\u2212 Remove stock"])
+  const inBtn = h<HTMLButtonElement>("button", { class: "seg seg-active", type: "button", onclick: () => setMode("in") }, ["+ Stock in"])
+  const outBtn = h<HTMLButtonElement>("button", { class: "seg", type: "button", onclick: () => setMode("out") }, ["\u2212 Stock out"])
   const segGroup = h("div", { class: "segmented" }, [inBtn, outBtn])
 
   const currentLabel = h("div", { class: "stock-current", text: "Select a product to begin." })
