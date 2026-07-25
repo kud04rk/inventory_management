@@ -1,9 +1,41 @@
 import { db } from "../db"
 import type { Employee, ViewCtx } from "../types"
 import { h, clear, toast } from "../ui"
+import { downloadCsv } from "../csv"
+
+const MONTHS_SHORT = Array.from({ length: 12 }, (_, i) =>
+  new Date(2000, i, 1).toLocaleDateString(undefined, { month: "short" }),
+)
+const MONTHS_LONG = Array.from({ length: 12 }, (_, i) =>
+  new Date(2000, i, 1).toLocaleDateString(undefined, { month: "long" }),
+)
+const NOW = new Date()
+const YEARS = Array.from({ length: 6 }, (_, i) => NOW.getFullYear() - 4 + i)
 
 let root: HTMLElement
 let nameInput: HTMLInputElement
+
+const exportState = new Map<string, { month: number; year: number }>()
+
+function ymd(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, "0")
+  const day = String(d.getDate()).padStart(2, "0")
+  return `${y}-${m}-${day}`
+}
+
+function getExportState(id: string): { month: number; year: number } {
+  let st = exportState.get(id)
+  if (!st) {
+    st = { month: NOW.getMonth(), year: NOW.getFullYear() }
+    exportState.set(id, st)
+  }
+  return st
+}
+
+function sanitizeFilename(s: string): string {
+  return s.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "") || "employee"
+}
 
 export async function renderEmployees(ctx: ViewCtx): Promise<HTMLElement> {
   root = h("div", { class: "view employees-view" })
@@ -49,7 +81,7 @@ async function paint(ctx: ViewCtx): Promise<void> {
       ? h(
           "span",
           { class: "muted small" },
-          [`Deleting an employee also clears their attendance history.`],
+          [`Pick a month/year on a row and export that person's attendance to CSV.`],
         )
       : h("span", {}),
   ])
@@ -74,6 +106,42 @@ async function paint(ctx: ViewCtx): Promise<void> {
 }
 
 function buildRow(emp: Employee, ctx: ViewCtx): HTMLElement {
+  const st = getExportState(emp.id)
+
+  const monthSelect = h<HTMLSelectElement>(
+    "select",
+    { class: "input emp-sel", "aria-label": "Month", title: "Month" },
+    MONTHS_SHORT.map((m, i) =>
+      h<HTMLOptionElement>("option", { value: String(i), text: m }, []),
+    ),
+  )
+  monthSelect.value = String(st.month)
+  monthSelect.addEventListener("change", () => {
+    st.month = Number(monthSelect.value)
+  })
+
+  const yearSelect = h<HTMLSelectElement>(
+    "select",
+    { class: "input emp-sel", "aria-label": "Year", title: "Year" },
+    YEARS.map((y) =>
+      h<HTMLOptionElement>("option", { value: String(y), text: String(y) }, []),
+    ),
+  )
+  yearSelect.value = String(st.year)
+  yearSelect.addEventListener("change", () => {
+    st.year = Number(yearSelect.value)
+  })
+
+  const exportBtn = h<HTMLButtonElement>(
+    "button",
+    {
+      class: "btn btn-secondary btn-sm",
+      type: "button",
+      onclick: () => void exportCsv(emp, st),
+    },
+    ["Export CSV"],
+  )
+
   const del = h<HTMLButtonElement>(
     "button",
     {
@@ -85,12 +153,13 @@ function buildRow(emp: Employee, ctx: ViewCtx): HTMLElement {
     },
     ["Delete"],
   )
+
   return h("div", { class: "list-row emp-row" }, [
     h("div", { class: "emp-avatar", text: initials(emp.name) }),
     h("div", { class: "list-main" }, [
       h("div", { class: "list-title", text: emp.name }),
     ]),
-    h("div", { class: "list-end" }, [del]),
+    h("div", { class: "emp-controls" }, [monthSelect, yearSelect, exportBtn, del]),
   ])
 }
 
@@ -99,6 +168,52 @@ function initials(name: string): string {
   if (parts.length === 0) return "?"
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+}
+
+function statusLabel(status: string): string {
+  if (status === "present") return "Present"
+  if (status === "leave") return "Leave"
+  if (status === "absent") return "Absent"
+  return status
+}
+
+async function exportCsv(
+  emp: Employee,
+  st: { month: number; year: number },
+): Promise<void> {
+  try {
+    const from = ymd(new Date(st.year, st.month, 1))
+    const to = ymd(new Date(st.year, st.month + 1, 0))
+    const entries = await db.getAttendance({
+      search: "",
+      status: null,
+      employeeId: emp.id,
+      from,
+      to,
+    })
+    if (entries.length === 0) {
+      toast(`No attendance for ${emp.name} in ${MONTHS_LONG[st.month]} ${st.year}`, "error")
+      return
+    }
+    const byDate = new Map(entries.map((a) => [a.date, a]))
+    const daysInMonth = new Date(st.year, st.month + 1, 0).getDate()
+
+    const data: (string | number)[][] = []
+    for (let d = 1; d <= daysInMonth; d++) {
+      const date = new Date(st.year, st.month, d)
+      const key = ymd(date)
+      const a = byDate.get(key)
+      const weekday = date.toLocaleDateString(undefined, { weekday: "short" })
+      data.push([key, weekday, a ? statusLabel(a.status) : ""])
+    }
+
+    const headers = ["Date", "Day", "Status"]
+    const filename = `attendance-${sanitizeFilename(emp.name)}-${MONTHS_SHORT[st.month]}-${st.year}.csv`
+    downloadCsv(filename, headers, data)
+    toast(`Exported ${emp.name} \u2014 ${MONTHS_LONG[st.month]} ${st.year}`, "success")
+  } catch (err) {
+    toast("Export failed: " + (err as Error).message, "error")
+  }
 }
 
 async function add(ctx: ViewCtx): Promise<void> {
@@ -127,6 +242,7 @@ async function add(ctx: ViewCtx): Promise<void> {
 async function remove(emp: Employee, ctx: ViewCtx): Promise<void> {
   try {
     await db.deleteEmployee(emp.id)
+    exportState.delete(emp.id)
     toast(`Deleted ${emp.name}`, "success")
     await paint(ctx)
   } catch (err) {

@@ -1110,7 +1110,7 @@ select.input {
    Employees master view
    ============================================================ */
 .employees-view {
-  max-width: 720px;
+  max-width: 920px;
 }
 .emp-add-panel {
   padding: 20px 22px;
@@ -1130,6 +1130,23 @@ select.input {
 }
 .emp-row {
   padding: 14px 4px;
+  flex-wrap: wrap;
+}
+.emp-row .list-main {
+  min-width: 160px;
+}
+.emp-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.emp-sel {
+  width: auto;
+  min-width: 92px;
+  min-height: 42px;
+  padding: 0 10px;
 }
 .emp-avatar {
   width: 44px;
