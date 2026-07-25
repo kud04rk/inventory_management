@@ -6,6 +6,7 @@ import { renderDashboard } from "./views/dashboard"
 import { renderInventory } from "./views/inventory"
 import { renderMovements } from "./views/movements"
 import { renderAttendance } from "./views/attendance"
+import { renderEmployees } from "./views/employees"
 import { renderSettings } from "./views/settings"
 import { openItemForm, openStockModal, openTransactionForm } from "./views/forms"
 
@@ -20,6 +21,8 @@ const ICON_SWAP = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" s
 
 const ICON_CLOCK = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`
 
+const ICON_USERS = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`
+
 const ICON_GEAR = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`
 
 const ICON_CHEVRON_LEFT = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>`
@@ -30,6 +33,7 @@ const NAV: { view: ViewName; label: string; icon: string }[] = [
   { view: "dashboard", label: "Dashboard", icon: ICON_GRID },
   { view: "inventory", label: "Inventory", icon: ICON_BOX },
   { view: "movements", label: "Transactions", icon: ICON_SWAP },
+  { view: "employees", label: "Employees", icon: ICON_USERS },
   { view: "attendance", label: "Attendance", icon: ICON_CLOCK },
   { view: "settings", label: "Settings", icon: ICON_GEAR },
 ]
@@ -38,6 +42,7 @@ const TITLES: Record<ViewName, string> = {
   dashboard: "Dashboard",
   inventory: "Inventory",
   movements: "Transactions",
+  employees: "Employees",
   attendance: "Attendance",
   settings: "Settings",
 }
@@ -189,7 +194,8 @@ function updateTypeActive(): void {
 }
 
 function updateAddButton(): void {
-  addBtn.style.display = currentView === "attendance" ? "none" : ""
+  const hideOn: ViewName[] = ["attendance", "employees"]
+  addBtn.style.display = hideOn.includes(currentView) ? "none" : ""
 }
 
 function updateBrand(): void {
@@ -240,6 +246,7 @@ async function renderView(view: ViewName): Promise<void> {
     if (view === "dashboard") node = await renderDashboard(c)
     else if (view === "inventory") node = await renderInventory(c)
     else if (view === "movements") node = await renderMovements(c)
+    else if (view === "employees") node = await renderEmployees(c)
     else if (view === "attendance") node = await renderAttendance(c)
     else node = await renderSettings(c)
     clear(content)

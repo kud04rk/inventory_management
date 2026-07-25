@@ -3,6 +3,8 @@ import type {
   Attendance,
   AttendanceInput,
   AttendanceQuery,
+  Employee,
+  EmployeeInput,
   Item,
   ItemInput,
   ItemType,
@@ -93,6 +95,9 @@ interface Backend {
   createAttendance(input: AttendanceInput): Promise<Attendance>
   updateAttendance(id: string, input: AttendanceInput): Promise<void>
   deleteAttendance(id: string): Promise<void>
+  getEmployees(): Promise<Employee[]>
+  createEmployee(input: EmployeeInput): Promise<Employee>
+  deleteEmployee(id: string): Promise<void>
   exportAll(): Promise<string>
   importAll(json: string): Promise<void>
 }
@@ -412,6 +417,10 @@ const tauriBackend: Backend = {
       where.push("status = ?")
       params.push(query.status)
     }
+    if (query.employeeId) {
+      where.push("employee_id = ?")
+      params.push(query.employeeId)
+    }
     if (query.from) {
       where.push("date >= ?")
       params.push(query.from)
@@ -431,11 +440,12 @@ const tauriBackend: Backend = {
     const id = uid()
     const now = new Date().toISOString()
     await pool!.execute(
-      `INSERT INTO attendance (id, employee, date, check_in, check_out, status, note, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO attendance (id, employee, employee_id, date, check_in, check_out, status, note, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
       [
         id,
         input.employee,
+        input.employee_id ?? null,
         input.date,
         input.check_in || null,
         input.check_out || null,
@@ -451,9 +461,10 @@ const tauriBackend: Backend = {
   async updateAttendance(id, input) {
     const now = new Date().toISOString()
     await pool!.execute(
-      `UPDATE attendance SET employee=?, date=?, check_in=?, check_out=?, status=?, note=?, updated_at=? WHERE id=?`,
+      `UPDATE attendance SET employee=?, employee_id=?, date=?, check_in=?, check_out=?, status=?, note=?, updated_at=? WHERE id=?`,
       [
         input.employee,
+        input.employee_id ?? null,
         input.date,
         input.check_in || null,
         input.check_out || null,
@@ -469,6 +480,25 @@ const tauriBackend: Backend = {
     await pool!.execute("DELETE FROM attendance WHERE id = ?", [id])
   },
 
+  async getEmployees() {
+    return pool!.select<Employee[]>("SELECT * FROM employees ORDER BY LOWER(name) ASC")
+  },
+
+  async createEmployee(input) {
+    const id = uid()
+    const now = new Date().toISOString()
+    await pool!.execute(
+      `INSERT INTO employees (id, name, created_at, updated_at) VALUES (?,?,?,?)`,
+      [id, input.name, now, now],
+    )
+    return { id, name: input.name, created_at: now, updated_at: now }
+  },
+
+  async deleteEmployee(id) {
+    await pool!.execute("DELETE FROM attendance WHERE employee_id = ?", [id])
+    await pool!.execute("DELETE FROM employees WHERE id = ?", [id])
+  },
+
   async exportAll() {
     const items = await pool!.select<Item[]>("SELECT * FROM items")
     const movements = await pool!.select<Movement[]>(
@@ -477,11 +507,12 @@ const tauriBackend: Backend = {
     const attendance = await pool!.select<Attendance[]>(
       "SELECT * FROM attendance",
     )
+    const employees = await pool!.select<Employee[]>("SELECT * FROM employees")
     const settings = await pool!.select<{ key: string; value: string }[]>(
       "SELECT * FROM settings",
     )
     return JSON.stringify(
-      { exportedAt: new Date().toISOString(), items, movements, attendance, settings },
+      { exportedAt: new Date().toISOString(), items, movements, attendance, employees, settings },
       null,
       2,
     )
@@ -492,6 +523,7 @@ const tauriBackend: Backend = {
       items: Item[]
       movements: Movement[]
       attendance?: Attendance[]
+      employees?: Employee[]
       settings: { key: string; value: string }[]
     }
     await pool!.execute("BEGIN")
@@ -499,6 +531,7 @@ const tauriBackend: Backend = {
       await pool!.execute("DELETE FROM movements")
       await pool!.execute("DELETE FROM items")
       await pool!.execute("DELETE FROM attendance")
+      await pool!.execute("DELETE FROM employees")
       await pool!.execute("DELETE FROM settings")
       for (const it of data.items ?? []) {
         await pool!.execute(
@@ -544,13 +577,20 @@ const tauriBackend: Backend = {
           [s.key, s.value],
         )
       }
+      for (const e of data.employees ?? []) {
+        await pool!.execute(
+          `INSERT INTO employees (id, name, created_at, updated_at) VALUES (?,?,?,?)`,
+          [e.id, e.name, e.created_at, e.updated_at],
+        )
+      }
       for (const a of data.attendance ?? []) {
         await pool!.execute(
-          `INSERT INTO attendance (id, employee, date, check_in, check_out, status, note, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?)`,
+          `INSERT INTO attendance (id, employee, employee_id, date, check_in, check_out, status, note, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?)`,
           [
             a.id,
             a.employee,
+            a.employee_id ?? null,
             a.date,
             a.check_in ?? null,
             a.check_out ?? null,
@@ -576,6 +616,7 @@ const KEYS = {
   movements: "inv.movements",
   settings: "inv.settings",
   attendance: "inv.attendance",
+  employees: "inv.employees",
   seeded: "inv.seeded",
 }
 
@@ -620,7 +661,9 @@ function mockSeed(): void {
   }))
   lsSave(KEYS.items, items)
   lsSave(KEYS.movements, movements)
-  lsSave(KEYS.attendance, seedAttendance())
+  const employees = seedEmployees()
+  lsSave(KEYS.employees, employees)
+  lsSave(KEYS.attendance, seedAttendance(employees))
   lsSave(KEYS.settings, [
     { key: "currency", value: "₹" },
     { key: "store_name", value: "My Store" },
@@ -628,19 +671,31 @@ function mockSeed(): void {
   localStorage.setItem(KEYS.seeded, "1")
 }
 
-function seedAttendance(): Attendance[] {
+function seedEmployees(): Employee[] {
+  const now = new Date().toISOString()
+  const mk = (name: string): Employee => ({
+    id: uid(),
+    name,
+    created_at: now,
+    updated_at: now,
+  })
+  return [mk("Aarav Sharma"), mk("Priya Nair"), mk("Rahul Verma")]
+}
+
+function seedAttendance(employees: Employee[]): Attendance[] {
   const out: Attendance[] = []
   const today = new Date()
-  const iso = (offset: number): string => {
-    const d = new Date(today)
-    d.setDate(d.getDate() - offset)
-    return d.toISOString().slice(0, 10)
+  const ymd = (offset: number): string => {
+    const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - offset)
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, "0")
+    const day = String(d.getDate()).padStart(2, "0")
+    return `${y}-${m}-${day}`
   }
+  const byName = new Map(employees.map((e) => [e.name, e.id]))
   const push = (
     employee: string,
     date: string,
-    check_in: string | null,
-    check_out: string | null,
     status: Attendance["status"],
     note: string | null,
   ): void => {
@@ -648,22 +703,23 @@ function seedAttendance(): Attendance[] {
     out.push({
       id: uid(),
       employee,
+      employee_id: byName.get(employee) ?? null,
       date,
-      check_in,
-      check_out,
+      check_in: null,
+      check_out: null,
       status,
       note,
       created_at: now,
       updated_at: now,
     })
   }
-  push("Aarav Sharma", iso(2), "09:00", "18:00", "present", null)
-  push("Aarav Sharma", iso(1), "09:30", "16:30", "present", "Left early")
-  push("Aarav Sharma", iso(0), null, null, "leave", "Sick leave")
-  push("Priya Nair", iso(2), "09:15", "18:30", "present", null)
-  push("Priya Nair", iso(1), null, null, "leave", "Personal")
-  push("Priya Nair", iso(0), "09:00", "17:00", "present", null)
-  push("Rahul Verma", iso(1), null, null, "absent", "No notice")
+  push("Aarav Sharma", ymd(2), "present", null)
+  push("Aarav Sharma", ymd(1), "present", "Left early")
+  push("Aarav Sharma", ymd(0), "leave", "Sick leave")
+  push("Priya Nair", ymd(2), "present", null)
+  push("Priya Nair", ymd(1), "leave", "Personal")
+  push("Priya Nair", ymd(0), "present", null)
+  push("Rahul Verma", ymd(1), "absent", "No notice")
   return out
 }
 
@@ -946,6 +1002,7 @@ const mockBackend: Backend = {
       )
     }
     if (query.status) rows = rows.filter((a) => a.status === query.status)
+    if (query.employeeId) rows = rows.filter((a) => a.employee_id === query.employeeId)
     if (query.from) rows = rows.filter((a) => a.date >= query.from!)
     if (query.to) rows = rows.filter((a) => a.date <= query.to!)
     return rows.sort((a, b) =>
@@ -957,6 +1014,7 @@ const mockBackend: Backend = {
     const rows = lsLoad<Attendance[]>(KEYS.attendance, [])
     const item: Attendance = {
       ...input,
+      employee_id: input.employee_id ?? null,
       id: uid(),
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -970,7 +1028,12 @@ const mockBackend: Backend = {
     const rows = lsLoad<Attendance[]>(KEYS.attendance, [])
     const idx = rows.findIndex((a) => a.id === id)
     if (idx >= 0) {
-      rows[idx] = { ...rows[idx], ...input, updated_at: new Date().toISOString() }
+      rows[idx] = {
+        ...rows[idx],
+        ...input,
+        employee_id: input.employee_id ?? null,
+        updated_at: new Date().toISOString(),
+      }
       lsSave(KEYS.attendance, rows)
     }
   },
@@ -980,6 +1043,34 @@ const mockBackend: Backend = {
     lsSave(KEYS.attendance, rows)
   },
 
+  async getEmployees() {
+    return lsLoad<Employee[]>(KEYS.employees, []).sort((a, b) =>
+      a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
+    )
+  },
+
+  async createEmployee(input) {
+    const rows = lsLoad<Employee[]>(KEYS.employees, [])
+    const item: Employee = {
+      id: uid(),
+      name: input.name,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }
+    rows.push(item)
+    lsSave(KEYS.employees, rows)
+    return item
+  },
+
+  async deleteEmployee(id) {
+    const attendance = lsLoad<Attendance[]>(KEYS.attendance, []).filter(
+      (a) => a.employee_id !== id,
+    )
+    lsSave(KEYS.attendance, attendance)
+    const rows = lsLoad<Employee[]>(KEYS.employees, []).filter((e) => e.id !== id)
+    lsSave(KEYS.employees, rows)
+  },
+
   async exportAll() {
     return JSON.stringify(
       {
@@ -987,6 +1078,7 @@ const mockBackend: Backend = {
         items: lsLoad<Item[]>(KEYS.items, []),
         movements: lsLoad<Movement[]>(KEYS.movements, []),
         attendance: lsLoad<Attendance[]>(KEYS.attendance, []),
+        employees: lsLoad<Employee[]>(KEYS.employees, []),
         settings: lsLoad(KEYS.settings, []),
       },
       null,
@@ -999,11 +1091,13 @@ const mockBackend: Backend = {
       items: Item[]
       movements: Movement[]
       attendance?: Attendance[]
+      employees?: Employee[]
       settings: { key: string; value: string }[]
     }
     lsSave(KEYS.items, data.items ?? [])
     lsSave(KEYS.movements, data.movements ?? [])
     lsSave(KEYS.attendance, data.attendance ?? [])
+    lsSave(KEYS.employees, data.employees ?? [])
     lsSave(KEYS.settings, data.settings ?? [])
   },
 }
