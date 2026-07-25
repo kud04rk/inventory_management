@@ -50,7 +50,32 @@ export interface Settings {
   storeName: string
 }
 
-export type ViewName = "dashboard" | "inventory" | "movements" | "settings"
+export const FULL_DAY_HOURS = 8
+
+export type AttendanceStatus = "present" | "leave" | "absent"
+
+export interface Attendance {
+  id: string
+  employee: string
+  date: string
+  check_in: string | null
+  check_out: string | null
+  status: AttendanceStatus
+  note: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type AttendanceInput = Omit<Attendance, "id" | "created_at" | "updated_at">
+
+export interface AttendanceQuery {
+  search: string
+  status: AttendanceStatus | null
+  from: string | null
+  to: string | null
+}
+
+export type ViewName = "dashboard" | "inventory" | "movements" | "attendance" | "settings"
 
 export interface ViewCtx {
   settings: Settings

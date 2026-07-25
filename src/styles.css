@@ -621,6 +621,9 @@ select.input {
 .tone-red .stat-value {
   color: var(--red);
 }
+.tone-amber .stat-value {
+  color: var(--amber);
+}
 
 /* ============================================================
    Lists (rows)
@@ -698,6 +701,10 @@ select.input {
 .pill-green {
   background: var(--green-tint);
   color: var(--green);
+}
+.pill-amber {
+  background: var(--amber-tint);
+  color: var(--amber);
 }
 .pill-red {
   background: var(--red-tint);
@@ -792,6 +799,28 @@ select.input {
 }
 .col-actions .btn {
   margin-left: 6px;
+}
+
+/* Attendance table */
+.attendance-table {
+  min-width: 820px;
+}
+.attendance-table .col-date,
+.attendance-table .col-time,
+.attendance-table .col-hours {
+  white-space: nowrap;
+}
+.hours {
+  font-weight: 700;
+}
+.hours-ok {
+  color: var(--green);
+}
+.hours-low {
+  color: var(--amber);
+}
+.report-help {
+  margin: -6px 0 16px;
 }
 
 /* ============================================================

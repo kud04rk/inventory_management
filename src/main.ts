@@ -5,6 +5,7 @@ import { clear, h } from "./ui"
 import { renderDashboard } from "./views/dashboard"
 import { renderInventory } from "./views/inventory"
 import { renderMovements } from "./views/movements"
+import { renderAttendance } from "./views/attendance"
 import { renderSettings } from "./views/settings"
 import { openItemForm, openStockModal, openTransactionForm } from "./views/forms"
 
@@ -17,6 +18,8 @@ const ICON_BOX = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" st
 
 const ICON_SWAP = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>`
 
+const ICON_CLOCK = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`
+
 const ICON_GEAR = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`
 
 const ICON_CHEVRON_LEFT = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>`
@@ -27,6 +30,7 @@ const NAV: { view: ViewName; label: string; icon: string }[] = [
   { view: "dashboard", label: "Dashboard", icon: ICON_GRID },
   { view: "inventory", label: "Inventory", icon: ICON_BOX },
   { view: "movements", label: "Transactions", icon: ICON_SWAP },
+  { view: "attendance", label: "Attendance", icon: ICON_CLOCK },
   { view: "settings", label: "Settings", icon: ICON_GEAR },
 ]
 
@@ -34,6 +38,7 @@ const TITLES: Record<ViewName, string> = {
   dashboard: "Dashboard",
   inventory: "Inventory",
   movements: "Transactions",
+  attendance: "Attendance",
   settings: "Settings",
 }
 
@@ -49,6 +54,8 @@ let navButtons: HTMLButtonElement[] = []
 let typeToggleBtns: HTMLButtonElement[] = []
 let pageTitle: HTMLElement
 let content: HTMLElement
+let brandNameEl: HTMLElement
+let addBtn: HTMLButtonElement
 let collapseBtn: HTMLButtonElement
 let sidebarCollapsed = false
 
@@ -91,10 +98,11 @@ async function boot(): Promise<void> {
 function renderShell(): void {
   clear(document.body)
 
+  brandNameEl = h("div", { class: "brand-name", text: settings.storeName })
   const brand = h("div", { class: "brand" }, [
     h("div", { class: "brand-mark", html: ICON_LOGO }),
     h("div", { class: "brand-text" }, [
-      h("div", { class: "brand-name", text: settings.storeName }),
+      brandNameEl,
       h("div", { class: "brand-sub", text: "Inventory" }),
     ]),
   ])
@@ -132,7 +140,7 @@ function renderShell(): void {
     h("div", { class: "sidebar-bottom" }, [footer, collapseBtn]),
   ])
 
-  const addBtn = h("button", { class: "btn btn-primary btn-add", type: "button", onclick: () => openItemForm(ctx()) }, [
+  addBtn = h("button", { class: "btn btn-primary btn-add", type: "button", onclick: () => openItemForm(ctx()) }, [
     h("span", { class: "plus", text: "+" }),
     " Add item",
   ])
@@ -162,6 +170,7 @@ function renderShell(): void {
 
   updateNavActive()
   updateTypeActive()
+  updateAddButton()
 }
 
 function setType(t: ItemType): void {
@@ -177,6 +186,14 @@ function updateTypeActive(): void {
     if (parent) parent.style.display = show ? "" : "none"
     btn.classList.toggle("seg-active", btn.dataset.type === stockType)
   }
+}
+
+function updateAddButton(): void {
+  addBtn.style.display = currentView === "attendance" ? "none" : ""
+}
+
+function updateBrand(): void {
+  if (brandNameEl) brandNameEl.textContent = settings.storeName
 }
 
 function ctx(): ViewCtx {
@@ -196,6 +213,7 @@ function go(view: ViewName): void {
   pageTitle.textContent = TITLES[view]
   updateNavActive()
   updateTypeActive()
+  updateAddButton()
   void renderView(view)
 }
 
@@ -215,13 +233,15 @@ async function renderView(view: ViewName): Promise<void> {
   clear(content)
   content.append(h("div", { class: "loading", text: "Loading..." }))
   try {
+    settings = await db.getSettings()
+    updateBrand()
     const c = ctx()
     let node: HTMLElement
     if (view === "dashboard") node = await renderDashboard(c)
     else if (view === "inventory") node = await renderInventory(c)
     else if (view === "movements") node = await renderMovements(c)
+    else if (view === "attendance") node = await renderAttendance(c)
     else node = await renderSettings(c)
-    settings = await db.getSettings()
     clear(content)
     content.append(node)
   } catch (err) {

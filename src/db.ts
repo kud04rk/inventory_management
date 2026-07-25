@@ -1,5 +1,8 @@
 import Database from "@tauri-apps/plugin-sql"
 import type {
+  Attendance,
+  AttendanceInput,
+  AttendanceQuery,
   Item,
   ItemInput,
   ItemType,
@@ -86,6 +89,10 @@ interface Backend {
   getItemValues(type: ItemType | null): Promise<Record<string, number>>
   getSettings(): Promise<Settings>
   setSetting(key: string, value: string): Promise<void>
+  getAttendance(query: AttendanceQuery): Promise<Attendance[]>
+  createAttendance(input: AttendanceInput): Promise<Attendance>
+  updateAttendance(id: string, input: AttendanceInput): Promise<void>
+  deleteAttendance(id: string): Promise<void>
   exportAll(): Promise<string>
   importAll(json: string): Promise<void>
 }
@@ -393,16 +400,88 @@ const tauriBackend: Backend = {
     )
   },
 
+  async getAttendance(query) {
+    const where: string[] = []
+    const params: unknown[] = []
+    const s = query.search.trim().toLowerCase()
+    if (s) {
+      where.push("(LOWER(employee) LIKE LOWER(?) OR LOWER(COALESCE(note,'')) LIKE LOWER(?))")
+      params.push(`%${s}%`, `%${s}%`)
+    }
+    if (query.status) {
+      where.push("status = ?")
+      params.push(query.status)
+    }
+    if (query.from) {
+      where.push("date >= ?")
+      params.push(query.from)
+    }
+    if (query.to) {
+      where.push("date <= ?")
+      params.push(query.to)
+    }
+    const sql =
+      "SELECT * FROM attendance " +
+      (where.length ? "WHERE " + where.join(" AND ") : "") +
+      " ORDER BY date DESC, created_at DESC"
+    return pool!.select<Attendance[]>(sql, params)
+  },
+
+  async createAttendance(input) {
+    const id = uid()
+    const now = new Date().toISOString()
+    await pool!.execute(
+      `INSERT INTO attendance (id, employee, date, check_in, check_out, status, note, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+      [
+        id,
+        input.employee,
+        input.date,
+        input.check_in || null,
+        input.check_out || null,
+        input.status,
+        input.note || null,
+        now,
+        now,
+      ],
+    )
+    return { ...input, id, created_at: now, updated_at: now }
+  },
+
+  async updateAttendance(id, input) {
+    const now = new Date().toISOString()
+    await pool!.execute(
+      `UPDATE attendance SET employee=?, date=?, check_in=?, check_out=?, status=?, note=?, updated_at=? WHERE id=?`,
+      [
+        input.employee,
+        input.date,
+        input.check_in || null,
+        input.check_out || null,
+        input.status,
+        input.note || null,
+        now,
+        id,
+      ],
+    )
+  },
+
+  async deleteAttendance(id) {
+    await pool!.execute("DELETE FROM attendance WHERE id = ?", [id])
+  },
+
   async exportAll() {
     const items = await pool!.select<Item[]>("SELECT * FROM items")
     const movements = await pool!.select<Movement[]>(
       "SELECT * FROM movements",
     )
+    const attendance = await pool!.select<Attendance[]>(
+      "SELECT * FROM attendance",
+    )
     const settings = await pool!.select<{ key: string; value: string }[]>(
       "SELECT * FROM settings",
     )
     return JSON.stringify(
-      { exportedAt: new Date().toISOString(), items, movements, settings },
+      { exportedAt: new Date().toISOString(), items, movements, attendance, settings },
       null,
       2,
     )
@@ -412,54 +491,80 @@ const tauriBackend: Backend = {
     const data = JSON.parse(json) as {
       items: Item[]
       movements: Movement[]
+      attendance?: Attendance[]
       settings: { key: string; value: string }[]
     }
-    await pool!.execute("DELETE FROM movements")
-    await pool!.execute("DELETE FROM items")
-    await pool!.execute("DELETE FROM settings")
-    for (const it of data.items ?? []) {
-      await pool!.execute(
-        `INSERT INTO items (id,name,type,sku,category,quantity,unit,price,location,reorder_level,notes,created_at,updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [
-          it.id,
-          it.name,
-          it.type ?? "finished",
-          it.sku,
-          it.category,
-          it.quantity,
-          it.unit,
-          it.price,
-          it.location,
-          it.reorder_level,
-          it.notes,
-          it.created_at,
-          it.updated_at,
-        ],
-      )
-    }
-    for (const mv of data.movements ?? []) {
-      await pool!.execute(
-        `INSERT INTO movements (id,item_id,type,quantity,reason,note,created_at,unit_price,remaining,consumed) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-        [
-          mv.id,
-          mv.item_id,
-          mv.type,
-          mv.quantity,
-          mv.reason,
-          mv.note,
-          mv.created_at,
-          mv.unit_price ?? null,
-          mv.remaining ?? null,
-          mv.consumed ?? null,
-        ],
-      )
-    }
-    for (const s of data.settings ?? []) {
-      await pool!.execute(
-        "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        [s.key, s.value],
-      )
+    await pool!.execute("BEGIN")
+    try {
+      await pool!.execute("DELETE FROM movements")
+      await pool!.execute("DELETE FROM items")
+      await pool!.execute("DELETE FROM attendance")
+      await pool!.execute("DELETE FROM settings")
+      for (const it of data.items ?? []) {
+        await pool!.execute(
+          `INSERT INTO items (id,name,type,sku,category,quantity,unit,price,location,reorder_level,notes,created_at,updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [
+            it.id,
+            it.name,
+            it.type ?? "finished",
+            it.sku,
+            it.category,
+            it.quantity,
+            it.unit,
+            it.price,
+            it.location,
+            it.reorder_level,
+            it.notes,
+            it.created_at,
+            it.updated_at,
+          ],
+        )
+      }
+      for (const mv of data.movements ?? []) {
+        await pool!.execute(
+          `INSERT INTO movements (id,item_id,type,quantity,reason,note,created_at,unit_price,remaining,consumed) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+          [
+            mv.id,
+            mv.item_id,
+            mv.type,
+            mv.quantity,
+            mv.reason,
+            mv.note,
+            mv.created_at,
+            mv.unit_price ?? null,
+            mv.remaining ?? null,
+            mv.consumed ?? null,
+          ],
+        )
+      }
+      for (const s of data.settings ?? []) {
+        await pool!.execute(
+          "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+          [s.key, s.value],
+        )
+      }
+      for (const a of data.attendance ?? []) {
+        await pool!.execute(
+          `INSERT INTO attendance (id, employee, date, check_in, check_out, status, note, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?)`,
+          [
+            a.id,
+            a.employee,
+            a.date,
+            a.check_in ?? null,
+            a.check_out ?? null,
+            a.status,
+            a.note ?? null,
+            a.created_at,
+            a.updated_at,
+          ],
+        )
+      }
+      await pool!.execute("COMMIT")
+    } catch (err) {
+      await pool!.execute("ROLLBACK")
+      throw err
     }
   },
 }
@@ -470,6 +575,7 @@ const KEYS = {
   items: "inv.items",
   movements: "inv.movements",
   settings: "inv.settings",
+  attendance: "inv.attendance",
   seeded: "inv.seeded",
 }
 
@@ -514,11 +620,51 @@ function mockSeed(): void {
   }))
   lsSave(KEYS.items, items)
   lsSave(KEYS.movements, movements)
+  lsSave(KEYS.attendance, seedAttendance())
   lsSave(KEYS.settings, [
     { key: "currency", value: "₹" },
     { key: "store_name", value: "My Store" },
   ])
   localStorage.setItem(KEYS.seeded, "1")
+}
+
+function seedAttendance(): Attendance[] {
+  const out: Attendance[] = []
+  const today = new Date()
+  const iso = (offset: number): string => {
+    const d = new Date(today)
+    d.setDate(d.getDate() - offset)
+    return d.toISOString().slice(0, 10)
+  }
+  const push = (
+    employee: string,
+    date: string,
+    check_in: string | null,
+    check_out: string | null,
+    status: Attendance["status"],
+    note: string | null,
+  ): void => {
+    const now = new Date().toISOString()
+    out.push({
+      id: uid(),
+      employee,
+      date,
+      check_in,
+      check_out,
+      status,
+      note,
+      created_at: now,
+      updated_at: now,
+    })
+  }
+  push("Aarav Sharma", iso(2), "09:00", "18:00", "present", null)
+  push("Aarav Sharma", iso(1), "09:30", "16:30", "present", "Left early")
+  push("Aarav Sharma", iso(0), null, null, "leave", "Sick leave")
+  push("Priya Nair", iso(2), "09:15", "18:30", "present", null)
+  push("Priya Nair", iso(1), null, null, "leave", "Personal")
+  push("Priya Nair", iso(0), "09:00", "17:00", "present", null)
+  push("Rahul Verma", iso(1), null, null, "absent", "No notice")
+  return out
 }
 
 function normItem(i: Item): Item {
@@ -789,12 +935,58 @@ const mockBackend: Backend = {
     lsSave(KEYS.settings, rows)
   },
 
+  async getAttendance(query) {
+    let rows = lsLoad<Attendance[]>(KEYS.attendance, [])
+    const s = query.search.trim().toLowerCase()
+    if (s) {
+      rows = rows.filter(
+        (a) =>
+          a.employee.toLowerCase().includes(s) ||
+          (a.note ?? "").toLowerCase().includes(s),
+      )
+    }
+    if (query.status) rows = rows.filter((a) => a.status === query.status)
+    if (query.from) rows = rows.filter((a) => a.date >= query.from!)
+    if (query.to) rows = rows.filter((a) => a.date <= query.to!)
+    return rows.sort((a, b) =>
+      a.date < b.date ? 1 : a.date > b.date ? -1 : a.created_at < b.created_at ? 1 : -1,
+    )
+  },
+
+  async createAttendance(input) {
+    const rows = lsLoad<Attendance[]>(KEYS.attendance, [])
+    const item: Attendance = {
+      ...input,
+      id: uid(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }
+    rows.push(item)
+    lsSave(KEYS.attendance, rows)
+    return item
+  },
+
+  async updateAttendance(id, input) {
+    const rows = lsLoad<Attendance[]>(KEYS.attendance, [])
+    const idx = rows.findIndex((a) => a.id === id)
+    if (idx >= 0) {
+      rows[idx] = { ...rows[idx], ...input, updated_at: new Date().toISOString() }
+      lsSave(KEYS.attendance, rows)
+    }
+  },
+
+  async deleteAttendance(id) {
+    const rows = lsLoad<Attendance[]>(KEYS.attendance, []).filter((a) => a.id !== id)
+    lsSave(KEYS.attendance, rows)
+  },
+
   async exportAll() {
     return JSON.stringify(
       {
         exportedAt: new Date().toISOString(),
         items: lsLoad<Item[]>(KEYS.items, []),
         movements: lsLoad<Movement[]>(KEYS.movements, []),
+        attendance: lsLoad<Attendance[]>(KEYS.attendance, []),
         settings: lsLoad(KEYS.settings, []),
       },
       null,
@@ -806,10 +998,12 @@ const mockBackend: Backend = {
     const data = JSON.parse(json) as {
       items: Item[]
       movements: Movement[]
+      attendance?: Attendance[]
       settings: { key: string; value: string }[]
     }
     lsSave(KEYS.items, data.items ?? [])
     lsSave(KEYS.movements, data.movements ?? [])
+    lsSave(KEYS.attendance, data.attendance ?? [])
     lsSave(KEYS.settings, data.settings ?? [])
   },
 }
