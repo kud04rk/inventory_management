@@ -9,8 +9,37 @@ import type {
   Stats,
 } from "./types"
 
+export interface MovementQuery {
+  itemId: string | null
+  type: MovementType | null
+  from: string | null
+  to: string | null
+}
+
 const isTauri =
   "__TAURI_INTERNALS__" in window || "__TAURI__" in window
+
+function buildMovementWhere(q: MovementQuery): { clause: string; params: unknown[] } {
+  const where: string[] = []
+  const params: unknown[] = []
+  if (q.itemId) {
+    where.push("m.item_id = ?")
+    params.push(q.itemId)
+  }
+  if (q.type) {
+    where.push("m.type = ?")
+    params.push(q.type)
+  }
+  if (q.from) {
+    where.push("m.created_at >= ?")
+    params.push(q.from)
+  }
+  if (q.to) {
+    where.push("m.created_at <= ?")
+    params.push(q.to)
+  }
+  return { clause: where.length ? "WHERE " + where.join(" AND ") : "", params }
+}
 
 export function uid(): string {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
@@ -50,6 +79,9 @@ interface Backend {
   ): Promise<void>
   deleteMovement(id: string): Promise<void>
   getMovements(limit: number, itemId: string | null): Promise<Movement[]>
+  getMovementsPage(limit: number, offset: number, query: MovementQuery): Promise<Movement[]>
+  countMovements(query: MovementQuery): Promise<number>
+  getMovementsAll(query: MovementQuery): Promise<Movement[]>
   getStats(type: ItemType | null): Promise<Stats>
   getItemValues(type: ItemType | null): Promise<Record<string, number>>
   getSettings(): Promise<Settings>
@@ -253,6 +285,33 @@ const tauriBackend: Backend = {
       (where.length ? "WHERE " + where.join(" AND ") : "") +
       " ORDER BY m.created_at DESC LIMIT ?"
     params.push(limit)
+    return pool!.select<Movement[]>(sql, params)
+  },
+
+  async getMovementsPage(limit, offset, query) {
+    const { clause, params } = buildMovementWhere(query)
+    const sql =
+      "SELECT m.*, i.name AS item_name FROM movements m LEFT JOIN items i ON i.id = m.item_id " +
+      clause +
+      " ORDER BY m.created_at DESC LIMIT ? OFFSET ?"
+    return pool!.select<Movement[]>(sql, [...params, limit, offset])
+  },
+
+  async countMovements(query) {
+    const { clause, params } = buildMovementWhere(query)
+    const rows = await pool!.select<{ c: number }[]>(
+      "SELECT COUNT(*) AS c FROM movements m " + clause,
+      params,
+    )
+    return Number(rows[0]?.c) || 0
+  },
+
+  async getMovementsAll(query) {
+    const { clause, params } = buildMovementWhere(query)
+    const sql =
+      "SELECT m.*, i.name AS item_name FROM movements m LEFT JOIN items i ON i.id = m.item_id " +
+      clause +
+      " ORDER BY m.created_at DESC"
     return pool!.select<Movement[]>(sql, params)
   },
 
@@ -466,6 +525,22 @@ function normItem(i: Item): Item {
   return { ...i, type: i.type ?? "finished" }
 }
 
+function mockQueryMovements(query: MovementQuery): Movement[] {
+  const movements = lsLoad<Movement[]>(KEYS.movements, [])
+  const items = lsLoad<Item[]>(KEYS.items, [])
+  const nameMap = new Map(items.map((i) => [i.id, i.name]))
+  let result = movements.map((m) => ({
+    ...m,
+    item_name: m.item_name ?? nameMap.get(m.item_id),
+  }))
+  if (query.itemId) result = result.filter((m) => m.item_id === query.itemId)
+  if (query.type) result = result.filter((m) => m.type === query.type)
+  if (query.from) result = result.filter((m) => m.created_at >= query.from!)
+  if (query.to) result = result.filter((m) => m.created_at <= query.to!)
+  result.sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
+  return result
+}
+
 function mkItem(
   name: string,
   type: ItemType,
@@ -638,6 +713,19 @@ const mockBackend: Backend = {
     if (itemId) result = result.filter((m) => m.item_id === itemId)
     result.sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
     return result.slice(0, limit)
+  },
+
+  async getMovementsPage(limit, offset, query) {
+    const all = await mockQueryMovements(query)
+    return all.slice(offset, offset + limit)
+  },
+
+  async countMovements(query) {
+    return (await mockQueryMovements(query)).length
+  },
+
+  async getMovementsAll(query) {
+    return mockQueryMovements(query)
   },
 
   async getStats(type) {

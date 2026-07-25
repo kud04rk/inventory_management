@@ -204,8 +204,64 @@ h3 {
 }
 
 .sidebar-footer {
-  margin-top: auto;
   padding: 14px 10px 4px;
+}
+
+.sidebar-bottom {
+  margin-top: auto;
+}
+
+.collapse-btn {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 12px;
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.95rem;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.collapse-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.collapse-btn svg {
+  flex-shrink: 0;
+}
+
+/* Collapsed (minimized) sidebar */
+.sidebar-collapsed .sidebar {
+  width: 76px;
+  padding: 18px 8px;
+}
+.sidebar-collapsed .brand {
+  justify-content: center;
+  padding: 4px 0 22px;
+}
+.sidebar-collapsed .brand-text,
+.sidebar-collapsed .nav-label,
+.sidebar-collapsed .sidebar-footer,
+.sidebar-collapsed .collapse-label {
+  display: none;
+}
+.sidebar-collapsed .nav-btn {
+  justify-content: center;
+  padding: 0;
+}
+.sidebar-collapsed .collapse-btn {
+  width: 100%;
+  padding: 0;
+}
+.sidebar {
+  transition: width 0.18s ease, padding 0.18s ease;
 }
 
 /* ---- Main column ---- */
@@ -426,6 +482,58 @@ select.input {
 .filter-select {
   width: auto;
   min-width: 200px;
+}
+
+/* Movements toolbar (type + date filters + actions) */
+.movements-toolbar {
+  align-items: center;
+}
+.date-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.date-filter-label {
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.date-input {
+  width: auto;
+  min-width: 150px;
+  min-height: 46px;
+  padding: 0 10px;
+}
+.toolbar-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+.load-more-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 16px 0 4px;
+}
+.load-more-btn {
+  min-width: 160px;
+}
+.export-all-wrap {
+  margin-top: 8px;
+  padding: 16px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.export-all-wrap .muted {
+  margin: 0;
 }
 
 /* ============================================================

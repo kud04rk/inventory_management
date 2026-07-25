@@ -19,6 +19,10 @@ const ICON_SWAP = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" s
 
 const ICON_GEAR = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`
 
+const ICON_CHEVRON_LEFT = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>`
+
+const ICON_CHEVRON_RIGHT = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>`
+
 const NAV: { view: ViewName; label: string; icon: string }[] = [
   { view: "dashboard", label: "Dashboard", icon: ICON_GRID },
   { view: "inventory", label: "Inventory", icon: ICON_BOX },
@@ -45,11 +49,42 @@ let navButtons: HTMLButtonElement[] = []
 let typeToggleBtns: HTMLButtonElement[] = []
 let pageTitle: HTMLElement
 let content: HTMLElement
+let collapseBtn: HTMLButtonElement
+let sidebarCollapsed = false
+
+const SIDEBAR_KEY = "inv.sidebarCollapsed"
+
+function loadSidebarCollapsed(): boolean {
+  return localStorage.getItem(SIDEBAR_KEY) === "1"
+}
+
+function applySidebarState(): void {
+  document.body.classList.toggle("sidebar-collapsed", sidebarCollapsed)
+  if (collapseBtn) {
+    collapseBtn.setAttribute(
+      "aria-label",
+      sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar",
+    )
+    collapseBtn.setAttribute(
+      "title",
+      sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar",
+    )
+    collapseBtn.innerHTML = sidebarCollapsed ? ICON_CHEVRON_RIGHT : ICON_CHEVRON_LEFT
+  }
+}
+
+function toggleSidebar(): void {
+  sidebarCollapsed = !sidebarCollapsed
+  localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed ? "1" : "0")
+  applySidebarState()
+}
 
 async function boot(): Promise<void> {
   await initDb()
   settings = await db.getSettings()
+  sidebarCollapsed = loadSidebarCollapsed()
   renderShell()
+  applySidebarState()
   await renderView(currentView)
 }
 
@@ -78,14 +113,23 @@ function renderShell(): void {
 
   const footer = h("div", { class: "sidebar-footer" }, [
     isPreview()
-      ? h("span", { class: "muted small", text: "Preview mode" })
-      : h("span", { class: "muted small", text: "Saved on this Mac" }),
+      ? h("span", { class: "muted small footer-text", text: "Preview mode" })
+      : h("span", { class: "muted small footer-text", text: "Saved on this Mac" }),
   ])
+
+  collapseBtn = h<HTMLButtonElement>("button", {
+    class: "collapse-btn",
+    type: "button",
+    "aria-label": sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar",
+    title: sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar",
+    html: sidebarCollapsed ? ICON_CHEVRON_RIGHT : ICON_CHEVRON_LEFT,
+    onclick: toggleSidebar,
+  })
 
   const sidebar = h("aside", { class: "sidebar" }, [
     brand,
     h("nav", { class: "nav" }, navButtons),
-    footer,
+    h("div", { class: "sidebar-bottom" }, [footer, collapseBtn]),
   ])
 
   const addBtn = h("button", { class: "btn btn-primary btn-add", type: "button", onclick: () => openItemForm(ctx()) }, [
