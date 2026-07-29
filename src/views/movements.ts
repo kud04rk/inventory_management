@@ -46,12 +46,18 @@ function buildRow(m: Movement, ctx: ViewCtx): HTMLElement {
     h("div", { class: `move-icon ${isIn ? "move-in" : "move-out"}`, text: isIn ? "\u2191" : "\u2193" }),
     h("div", { class: "list-main" }, [
       h("div", { class: "list-title", text: m.item_name ?? "Unknown item" }),
-      h("div", { class: "list-sub", text: `${isIn ? "Added" : "Removed"} ${m.quantity} \u00b7 ${m.reason ?? "No reason"}${priceBit}${m.note ? " \u00b7 " + m.note : ""}` }),
+      h("div", { class: "list-sub", text: `${isIn ? "Added" : "Removed"} ${m.quantity} \u00b7 ${m.reason ?? "No reason"}${priceBit}${m.note ? " \u00b7 " + m.note : ""} \u00b7 ${formatDateTime(m.created_at)}` }),
     ]),
     h("div", { class: "list-end" }, [
       h("span", { class: `pill ${isIn ? "pill-green" : "pill-red"}`, text: `${isIn ? "+" : "\u2212"}${m.quantity}` }),
-      h("div", { class: "list-date", text: formatDateTime(m.created_at) }),
-      h("button", { class: "btn btn-danger-ghost btn-sm", type: "button", onclick: () => confirmDeleteMovement(m) }, ["Undo"]),
+      h<HTMLButtonElement>("button", {
+        class: "icon-btn icon-btn-danger",
+        type: "button",
+        title: "Undo transaction",
+        "aria-label": "Undo transaction",
+        onclick: () => confirmDeleteMovement(m),
+        html: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>',
+      }),
     ]),
   ])
 }
