@@ -3,6 +3,7 @@ import type {
   Attendance,
   AttendanceInput,
   AttendanceQuery,
+  DashboardMetrics,
   Employee,
   EmployeeInput,
   Item,
@@ -12,6 +13,7 @@ import type {
   MovementType,
   Settings,
   Stats,
+  TopSeller,
 } from "./types"
 
 export interface MovementQuery {
@@ -53,6 +55,23 @@ export function uid(): string {
   return "id-" + Math.random().toString(36).slice(2) + Date.now().toString(36)
 }
 
+function todayStr(): string {
+  const d = new Date()
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, "0")
+  const day = String(d.getDate()).padStart(2, "0")
+  return `${y}-${m}-${day}`
+}
+
+function monthBounds(): { start: string; end: string } {
+  const now = new Date()
+  const start = new Date(now.getFullYear(), now.getMonth(), 1)
+  const end = new Date(now.getFullYear(), now.getMonth() + 1, 1)
+  const fmt = (d: Date): string =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
+  return { start: fmt(start), end: fmt(end) }
+}
+
 let pool: Database | null = null
 
 export async function initDb(): Promise<void> {
@@ -81,6 +100,7 @@ interface Backend {
     reason: string,
     note: string,
     unitPrice?: number,
+    createdAt?: string,
   ): Promise<void>
   deleteMovement(id: string): Promise<void>
   getMovements(limit: number, itemId: string | null): Promise<Movement[]>
@@ -89,6 +109,8 @@ interface Backend {
   getMovementsAll(query: MovementQuery): Promise<Movement[]>
   getStats(type: ItemType | null): Promise<Stats>
   getItemValues(type: ItemType | null): Promise<Record<string, number>>
+  getDashboardMetrics(type: ItemType | null): Promise<DashboardMetrics>
+  getTopSellers(type: ItemType | null, limit: number): Promise<TopSeller[]>
   getSettings(): Promise<Settings>
   setSetting(key: string, value: string): Promise<void>
   getAttendance(query: AttendanceQuery): Promise<Attendance[]>
@@ -190,8 +212,9 @@ const tauriBackend: Backend = {
     await pool!.execute("DELETE FROM items WHERE id = ?", [id])
   },
 
-  async addMovement(itemId, type, quantity, reason, note, unitPrice) {
+  async addMovement(itemId, type, quantity, reason, note, unitPrice, createdAt) {
     const now = new Date().toISOString()
+    const moveDate = createdAt ?? now
     let actual = quantity
     let consumedJson: string | null = null
     if (type === "out") {
@@ -234,8 +257,8 @@ const tauriBackend: Backend = {
         actual,
         reason || null,
         note || null,
-        now,
-        type === "in" ? (unitPrice ?? 0) : null,
+        moveDate,
+        type === "in" ? (unitPrice ?? 0) : (unitPrice ?? null),
         type === "in" ? actual : null,
         consumedJson,
       ],
@@ -386,6 +409,108 @@ const tauriBackend: Backend = {
     return map
   },
 
+  async getDashboardMetrics(type) {
+    const typeAnd = type ? "AND i.type = ?" : ""
+    const tp = type ? [type] : []
+    const today = todayStr()
+    const { start, end } = monthBounds()
+
+    const finWhere: string[] = ["m.created_at >= ?", "m.created_at < ?"]
+    const finParams: unknown[] = [start, end]
+    if (type) {
+      finWhere.push("i.type = ?")
+      finParams.push(type)
+    }
+    const fin = await pool!.select<{
+      revenue: number
+      unitsSold: number
+      salesCount: number
+      purchaseCost: number
+      unitsPurchased: number
+      purchaseCount: number
+    }[]>(
+      `SELECT
+         COALESCE(SUM(CASE WHEN m.type='out' AND m.unit_price IS NOT NULL THEN m.quantity*m.unit_price ELSE 0 END),0) AS revenue,
+         COALESCE(SUM(CASE WHEN m.type='out' AND m.unit_price IS NOT NULL THEN m.quantity ELSE 0 END),0) AS unitsSold,
+         COALESCE(SUM(CASE WHEN m.type='out' AND m.unit_price IS NOT NULL THEN 1 ELSE 0 END),0) AS salesCount,
+         COALESCE(SUM(CASE WHEN m.type='in' THEN m.quantity*COALESCE(m.unit_price,0) ELSE 0 END),0) AS purchaseCost,
+         COALESCE(SUM(CASE WHEN m.type='in' THEN m.quantity ELSE 0 END),0) AS unitsPurchased,
+         COALESCE(SUM(CASE WHEN m.type='in' THEN 1 ELSE 0 END),0) AS purchaseCount
+       FROM movements m LEFT JOIN items i ON i.id=m.item_id WHERE ${finWhere.join(" AND ")}`,
+      finParams,
+    )
+    const cogs = await pool!.select<{ cogs: number }[]>(
+      `SELECT COALESCE(SUM(json_extract(c.value,'$.qty')*b.unit_price),0) AS cogs
+       FROM movements o
+       LEFT JOIN items i ON i.id=o.item_id
+       JOIN json_each(o.consumed) c
+       JOIN movements b ON b.id=json_extract(c.value,'$.id')
+       WHERE o.type='out' AND o.unit_price IS NOT NULL AND o.consumed IS NOT NULL AND json_valid(o.consumed)
+         AND o.created_at >= ? AND o.created_at < ? ${typeAnd}`,
+      [start, end, ...tp],
+    )
+    const att = await pool!.select<{
+      total: number
+      present: number
+      onleave: number
+      absent: number
+      todayPresent: number
+    }[]>(
+      `SELECT
+         COUNT(*) AS total,
+         COALESCE(SUM(CASE WHEN status='present' THEN 1 ELSE 0 END),0) AS present,
+         COALESCE(SUM(CASE WHEN status='leave' THEN 1 ELSE 0 END),0) AS onleave,
+         COALESCE(SUM(CASE WHEN status='absent' THEN 1 ELSE 0 END),0) AS absent,
+         COALESCE(SUM(CASE WHEN status='present' AND date=? THEN 1 ELSE 0 END),0) AS todayPresent
+       FROM attendance
+       WHERE date >= ? AND date < ?`,
+      [today, start, end],
+    )
+    const emp = await pool!.select<{ c: number }[]>(
+      "SELECT COUNT(*) AS c FROM employees",
+    )
+    const f = fin[0] ?? {}
+    const a = att[0] ?? {}
+    return {
+      revenue: Number(f.revenue) || 0,
+      unitsSold: Number(f.unitsSold) || 0,
+      salesCount: Number(f.salesCount) || 0,
+      purchaseCost: Number(f.purchaseCost) || 0,
+      unitsPurchased: Number(f.unitsPurchased) || 0,
+      purchaseCount: Number(f.purchaseCount) || 0,
+      cogs: Number(cogs[0]?.cogs) || 0,
+      attendanceTotal: Number(a.total) || 0,
+      present: Number(a.present) || 0,
+      leave: Number(a.onleave) || 0,
+      absent: Number(a.absent) || 0,
+      todayPresent: Number(a.todayPresent) || 0,
+      employeeCount: Number(emp[0]?.c) || 0,
+    }
+  },
+
+  async getTopSellers(type, limit) {
+    const typeAnd = type ? "AND i.type = ?" : ""
+    const tp = type ? [type] : []
+    const rows = await pool!.select<
+      { item_id: string; item_name: string | null; units: number; revenue: number }[]
+    >(
+      `SELECT m.item_id AS item_id, i.name AS item_name,
+         SUM(m.quantity) AS units, SUM(m.quantity*m.unit_price) AS revenue
+       FROM movements m LEFT JOIN items i ON i.id=m.item_id
+       WHERE m.type='out' AND m.unit_price IS NOT NULL ${typeAnd}
+       GROUP BY m.item_id
+       ORDER BY units DESC
+       LIMIT ?`,
+      [...tp, limit],
+    )
+    return rows.map((r) => ({
+      item_id: r.item_id,
+      item_name: r.item_name ?? null,
+      units: Number(r.units) || 0,
+      revenue: Number(r.revenue) || 0,
+    }))
+  },
+
   async getSettings() {
     const rows = await pool!.select<{ key: string; value: string }[]>(
       "SELECT key, value FROM settings",
@@ -440,8 +565,8 @@ const tauriBackend: Backend = {
     const id = uid()
     const now = new Date().toISOString()
     await pool!.execute(
-      `INSERT INTO attendance (id, employee, employee_id, date, check_in, check_out, status, note, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO attendance (id, employee, employee_id, date, check_in, check_out, status, note, overtime, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
       [
         id,
         input.employee,
@@ -451,6 +576,7 @@ const tauriBackend: Backend = {
         input.check_out || null,
         input.status,
         input.note || null,
+        input.overtime ?? null,
         now,
         now,
       ],
@@ -461,7 +587,7 @@ const tauriBackend: Backend = {
   async updateAttendance(id, input) {
     const now = new Date().toISOString()
     await pool!.execute(
-      `UPDATE attendance SET employee=?, employee_id=?, date=?, check_in=?, check_out=?, status=?, note=?, updated_at=? WHERE id=?`,
+      `UPDATE attendance SET employee=?, employee_id=?, date=?, check_in=?, check_out=?, status=?, note=?, overtime=?, updated_at=? WHERE id=?`,
       [
         input.employee,
         input.employee_id ?? null,
@@ -470,6 +596,7 @@ const tauriBackend: Backend = {
         input.check_out || null,
         input.status,
         input.note || null,
+        input.overtime ?? null,
         now,
         id,
       ],
@@ -585,8 +712,8 @@ const tauriBackend: Backend = {
       }
       for (const a of data.attendance ?? []) {
         await pool!.execute(
-          `INSERT INTO attendance (id, employee, employee_id, date, check_in, check_out, status, note, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?)`,
+          `INSERT INTO attendance (id, employee, employee_id, date, check_in, check_out, status, note, overtime, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
           [
             a.id,
             a.employee,
@@ -596,6 +723,7 @@ const tauriBackend: Backend = {
             a.check_out ?? null,
             a.status,
             a.note ?? null,
+            a.overtime ?? null,
             a.created_at,
             a.updated_at,
           ],
@@ -698,6 +826,7 @@ function seedAttendance(employees: Employee[]): Attendance[] {
     date: string,
     status: Attendance["status"],
     note: string | null,
+    overtime: number | null = null,
   ): void => {
     const now = new Date().toISOString()
     out.push({
@@ -709,14 +838,15 @@ function seedAttendance(employees: Employee[]): Attendance[] {
       check_out: null,
       status,
       note,
+      overtime,
       created_at: now,
       updated_at: now,
     })
   }
-  push("Aarav Sharma", ymd(2), "present", null)
+  push("Aarav Sharma", ymd(2), "present", null, 1.5)
   push("Aarav Sharma", ymd(1), "present", "Left early")
   push("Aarav Sharma", ymd(0), "leave", "Sick leave")
-  push("Priya Nair", ymd(2), "present", null)
+  push("Priya Nair", ymd(2), "present", null, 2)
   push("Priya Nair", ymd(1), "leave", "Personal")
   push("Priya Nair", ymd(0), "present", null)
   push("Rahul Verma", ymd(1), "absent", "No notice")
@@ -823,7 +953,7 @@ const mockBackend: Backend = {
     lsSave(KEYS.movements, movements)
   },
 
-  async addMovement(itemId, type, quantity, reason, note, unitPrice) {
+  async addMovement(itemId, type, quantity, reason, note, unitPrice, createdAt) {
     const items = lsLoad<Item[]>(KEYS.items, [])
     const idx = items.findIndex((i) => i.id === itemId)
     if (idx < 0) return
@@ -866,9 +996,9 @@ const mockBackend: Backend = {
       quantity: actual,
       reason: reason || null,
       note: note || null,
-      created_at: new Date().toISOString(),
+      created_at: createdAt ?? new Date().toISOString(),
       item_name: item.name,
-      unit_price: type === "in" ? (unitPrice ?? 0) : null,
+      unit_price: type === "in" ? (unitPrice ?? 0) : (unitPrice ?? null),
       remaining: type === "in" ? actual : null,
       consumed: type === "out" ? consumedJson : null,
     })
@@ -974,6 +1104,112 @@ const mockBackend: Backend = {
       }
     }
     return map
+  },
+
+  async getDashboardMetrics(type) {
+    const items = lsLoad<Item[]>(KEYS.items, []).map(normItem)
+    const movements = lsLoad<Movement[]>(KEYS.movements, [])
+    const { start, end } = monthBounds()
+    const typeIds = type
+      ? new Set(items.filter((i) => i.type === type).map((i) => i.id))
+      : null
+    const inType = (itemId: string): boolean => !typeIds || typeIds.has(itemId)
+    const inMonth = (ts: string): boolean => ts >= start && ts < end
+
+    const inPrice = new Map<string, number>()
+    for (const m of movements) {
+      if (m.type === "in") inPrice.set(m.id, m.unit_price ?? 0)
+    }
+
+    let revenue = 0
+    let unitsSold = 0
+    let salesCount = 0
+    let purchaseCost = 0
+    let unitsPurchased = 0
+    let purchaseCount = 0
+    let cogs = 0
+    for (const m of movements) {
+      if (!inType(m.item_id) || !inMonth(m.created_at)) continue
+      if (m.type === "out" && m.unit_price != null) {
+        revenue += m.quantity * m.unit_price
+        unitsSold += m.quantity
+        salesCount += 1
+        if (m.consumed) {
+          try {
+            const consumed = JSON.parse(m.consumed) as { id: string; qty: number }[]
+            for (const c of consumed) {
+              cogs += c.qty * (inPrice.get(c.id) ?? 0)
+            }
+          } catch {
+            /* ignore malformed consumed payload */
+          }
+        }
+      } else if (m.type === "in") {
+        purchaseCost += m.quantity * (m.unit_price ?? 0)
+        unitsPurchased += m.quantity
+        purchaseCount += 1
+      }
+    }
+
+    const attendance = lsLoad<Attendance[]>(KEYS.attendance, []).filter(
+      (a) => a.date >= start && a.date < end,
+    )
+    const today = todayStr()
+    let present = 0
+    let leave = 0
+    let absent = 0
+    let todayPresent = 0
+    for (const a of attendance) {
+      if (a.status === "present") {
+        present++
+        if (a.date === today) todayPresent++
+      } else if (a.status === "leave") leave++
+      else if (a.status === "absent") absent++
+    }
+    const employees = lsLoad<Employee[]>(KEYS.employees, [])
+
+    return {
+      revenue,
+      unitsSold,
+      salesCount,
+      purchaseCost,
+      unitsPurchased,
+      purchaseCount,
+      cogs,
+      attendanceTotal: attendance.length,
+      present,
+      leave,
+      absent,
+      todayPresent,
+      employeeCount: employees.length,
+    }
+  },
+
+  async getTopSellers(type, limit) {
+    const items = lsLoad<Item[]>(KEYS.items, []).map(normItem)
+    const nameMap = new Map(items.map((i) => [i.id, i.name]))
+    const typeIds = type
+      ? new Set(items.filter((i) => i.type === type).map((i) => i.id))
+      : null
+    const movements = lsLoad<Movement[]>(KEYS.movements, [])
+    const agg = new Map<string, { units: number; revenue: number }>()
+    for (const m of movements) {
+      if (m.type !== "out" || m.unit_price == null) continue
+      if (typeIds && !typeIds.has(m.item_id)) continue
+      const cur = agg.get(m.item_id) ?? { units: 0, revenue: 0 }
+      cur.units += m.quantity
+      cur.revenue += m.quantity * m.unit_price
+      agg.set(m.item_id, cur)
+    }
+    return [...agg.entries()]
+      .map(([item_id, v]) => ({
+        item_id,
+        item_name: nameMap.get(item_id) ?? null,
+        units: v.units,
+        revenue: v.revenue,
+      }))
+      .sort((a, b) => b.units - a.units)
+      .slice(0, limit)
   },
 
   async getSettings() {

@@ -45,6 +45,12 @@ function unitSelect(value: string | null): HTMLSelectElement {
   return select
 }
 
+function nowLocalDateTime(): string {
+  const d = new Date()
+  const pad = (n: number): string => String(n).padStart(2, "0")
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 export async function openItemForm(ctx: ViewCtx, existing?: Item): Promise<void> {
   const categories = await db.getCategories()
   const isEdit = !!existing
@@ -164,7 +170,7 @@ export async function openStockModal(ctx: ViewCtx, item: Item): Promise<void> {
   const reasonSelect = document.createElement("select")
   reasonSelect.className = "input"
   const buildReasons = (m: "in" | "out") => {
-    const list = m === "in" ? ["Purchase", "Return", "Stocktake adjustment", "Other"] : ["Sale", "Damaged", "Expired", "Stocktake adjustment", "Other"]
+    const list = m === "in" ? ["Purchase", "Received from production", "Return", "Stocktake adjustment", "Other"] : ["Sale", "Damaged", "Expired", "Stocktake adjustment", "Other"]
     reasonSelect.innerHTML = ""
     reasonSelect.append(h("option", { value: "" }, ["(optional) Reason"]))
     for (const r of list) reasonSelect.append(h("option", { value: r }, [r]))
@@ -172,13 +178,26 @@ export async function openStockModal(ctx: ViewCtx, item: Item): Promise<void> {
   buildReasons(mode)
 
   const note = textInput("note", "", { placeholder: "Optional note" })
+  const dateInput = textInput("date", nowLocalDateTime(), { type: "datetime-local" })
 
   const unitPrice = textInput("unit_price", String(item.price || 0), { type: "number", min: "0", step: "0.01" })
-  const unitPriceField = field(
-    `Unit price (${ctx.settings.currency})`,
-    unitPrice,
-    "Cost per unit for this batch of stock. Used to value inventory (FIFO).",
-  )
+  const unitPriceLabel = h("label", { class: "field-label", text: `Unit price (${ctx.settings.currency})` })
+  const unitPriceHint = h("div", { class: "field-hint", text: "Cost per unit for this batch of stock. Used to value inventory (FIFO)." })
+  const unitPriceField = h("div", { class: "field" }, [unitPriceLabel, unitPrice, unitPriceHint])
+
+  function updatePriceField(): void {
+    const isSale = mode === "out" && reasonSelect.value === "Sale"
+    unitPriceField.style.display = mode === "in" || isSale ? "" : "none"
+    unitPrice.required = isSale
+    if (isSale) {
+      unitPriceLabel.textContent = `Sale price (${ctx.settings.currency}) *`
+      unitPriceHint.textContent = "Selling price per unit for this sale."
+    } else {
+      unitPriceLabel.textContent = `Unit price (${ctx.settings.currency})`
+      unitPriceHint.textContent = "Cost per unit for this batch of stock. Used to value inventory (FIFO)."
+    }
+  }
+  reasonSelect.addEventListener("change", updatePriceField)
 
   const currentLabel = h("div", { class: "stock-current", html: `Current stock: <b>${item.quantity}${item.unit ? " " + item.unit : ""}</b>` })
 
@@ -193,7 +212,7 @@ export async function openStockModal(ctx: ViewCtx, item: Item): Promise<void> {
     inBtn.classList.toggle("seg-in", m === "in")
     outBtn.classList.toggle("seg-out", m === "out")
     buildReasons(m)
-    unitPriceField.style.display = m === "in" ? "" : "none"
+    updatePriceField()
     updateWarning()
   }
 
@@ -218,10 +237,15 @@ export async function openStockModal(ctx: ViewCtx, item: Item): Promise<void> {
     h("div", { class: "modal-item-name", text: item.name }),
     currentLabel,
     segGroup,
-    field("Quantity", stepper),
+    h("div", { class: "grid-2" }, [
+      field("Quantity", stepper),
+      field("Date & time", dateInput),
+    ]),
     unitPriceField,
-    field("Reason", reasonSelect),
-    field("Note", note),
+    h("div", { class: "grid-2" }, [
+      field("Reason", reasonSelect),
+      field("Note", note),
+    ]),
     warning,
     h("div", { class: "form-actions" }, [
       h("button", { class: "btn btn-ghost", type: "button", onclick: () => closeModal() }, ["Cancel"]),
@@ -232,11 +256,19 @@ export async function openStockModal(ctx: ViewCtx, item: Item): Promise<void> {
   form.addEventListener("submit", async (e) => {
     e.preventDefault()
     const q = Math.max(1, Math.floor(Number(qty.value) || 0))
+    const isSale = mode === "out" && reasonSelect.value === "Sale"
+    if (isSale && (Number(unitPrice.value) || 0) <= 0) {
+      clear(warning)
+      warning.append(`Please enter the sale price per unit (${ctx.settings.currency}).`)
+      unitPrice.focus()
+      return
+    }
     confirmBtn.disabled = true
     confirmBtn.textContent = "Saving..."
     try {
-      const up = mode === "in" ? Math.max(0, Number(unitPrice.value) || 0) : undefined
-      await db.addMovement(item.id, mode, q, reasonSelect.value, note.value.trim(), up)
+      const up = mode === "in" || isSale ? Math.max(0, Number(unitPrice.value) || 0) : undefined
+      const when = dateInput.value ? new Date(dateInput.value).toISOString() : undefined
+      await db.addMovement(item.id, mode, q, reasonSelect.value, note.value.trim(), up, when)
       toast(mode === "in" ? "Stock added" : "Stock removed", "success")
       closeModal()
       ctx.refresh()
@@ -279,7 +311,7 @@ export async function openTransactionForm(ctx: ViewCtx): Promise<void> {
   const reasonSelect = document.createElement("select")
   reasonSelect.className = "input"
   const buildReasons = (m: "in" | "out") => {
-    const list = m === "in" ? ["Purchase", "Return", "Stocktake adjustment", "Other"] : ["Sale", "Sent to production", "Damaged", "Expired", "Stocktake adjustment", "Other"]
+    const list = m === "in" ? ["Purchase", "Received from production", "Return", "Stocktake adjustment", "Other"] : ["Sale", "Sent to production", "Damaged", "Expired", "Stocktake adjustment", "Other"]
     reasonSelect.innerHTML = ""
     reasonSelect.append(h("option", { value: "" }, ["(optional) Reason"]))
     for (const r of list) reasonSelect.append(h("option", { value: r }, [r]))
@@ -287,13 +319,26 @@ export async function openTransactionForm(ctx: ViewCtx): Promise<void> {
   buildReasons(mode)
 
   const note = textInput("note", "", { placeholder: "Optional note" })
+  const dateInput = textInput("date", nowLocalDateTime(), { type: "datetime-local" })
 
   const unitPrice = textInput("unit_price", "0", { type: "number", min: "0", step: "0.01" })
-  const unitPriceField = field(
-    `Unit price (${ctx.settings.currency})`,
-    unitPrice,
-    "Cost per unit for this batch of stock. Used to value inventory (FIFO).",
-  )
+  const unitPriceLabel = h("label", { class: "field-label", text: `Unit price (${ctx.settings.currency})` })
+  const unitPriceHint = h("div", { class: "field-hint", text: "Cost per unit for this batch of stock. Used to value inventory (FIFO)." })
+  const unitPriceField = h("div", { class: "field" }, [unitPriceLabel, unitPrice, unitPriceHint])
+
+  function updatePriceField(): void {
+    const isSale = mode === "out" && reasonSelect.value === "Sale"
+    unitPriceField.style.display = mode === "in" || isSale ? "" : "none"
+    unitPrice.required = isSale
+    if (isSale) {
+      unitPriceLabel.textContent = `Sale price (${ctx.settings.currency}) *`
+      unitPriceHint.textContent = "Selling price per unit for this sale."
+    } else {
+      unitPriceLabel.textContent = `Unit price (${ctx.settings.currency})`
+      unitPriceHint.textContent = "Cost per unit for this batch of stock. Used to value inventory (FIFO)."
+    }
+  }
+  reasonSelect.addEventListener("change", updatePriceField)
 
   const inBtn = h<HTMLButtonElement>("button", { class: "seg seg-active", type: "button", onclick: () => setMode("in") }, ["+ Stock in"])
   const outBtn = h<HTMLButtonElement>("button", { class: "seg", type: "button", onclick: () => setMode("out") }, ["\u2212 Stock out"])
@@ -334,7 +379,7 @@ export async function openTransactionForm(ctx: ViewCtx): Promise<void> {
     inBtn.classList.toggle("seg-in", m === "in")
     outBtn.classList.toggle("seg-out", m === "out")
     buildReasons(m)
-    unitPriceField.style.display = m === "in" ? "" : "none"
+    updatePriceField()
     updateWarning()
   }
 
@@ -351,10 +396,15 @@ export async function openTransactionForm(ctx: ViewCtx): Promise<void> {
     field("Product", product),
     currentLabel,
     field("Direction", segGroup),
-    field("Quantity", stepper),
+    h("div", { class: "grid-2" }, [
+      field("Quantity", stepper),
+      field("Date & time", dateInput),
+    ]),
     unitPriceField,
-    field("Reason", reasonSelect),
-    field("Note", note),
+    h("div", { class: "grid-2" }, [
+      field("Reason", reasonSelect),
+      field("Note", note),
+    ]),
     warning,
     errorBox,
     h("div", { class: "form-actions" }, [
@@ -373,11 +423,18 @@ export async function openTransactionForm(ctx: ViewCtx): Promise<void> {
       return
     }
     const q = Math.max(1, Math.floor(Number(qty.value) || 0))
+    const isSale = mode === "out" && reasonSelect.value === "Sale"
+    if (isSale && (Number(unitPrice.value) || 0) <= 0) {
+      errorBox.append(`Please enter the sale price per unit (${ctx.settings.currency}).`)
+      unitPrice.focus()
+      return
+    }
     confirmBtn.disabled = true
     confirmBtn.textContent = "Saving..."
     try {
-      const up = mode === "in" ? Math.max(0, Number(unitPrice.value) || 0) : undefined
-      await db.addMovement(it.id, mode, q, reasonSelect.value, note.value.trim(), up)
+      const up = mode === "in" || isSale ? Math.max(0, Number(unitPrice.value) || 0) : undefined
+      const when = dateInput.value ? new Date(dateInput.value).toISOString() : undefined
+      await db.addMovement(it.id, mode, q, reasonSelect.value, note.value.trim(), up, when)
       toast(mode === "in" ? "Stock added" : "Stock removed", "success")
       closeModal()
       ctx.refresh()

@@ -1,6 +1,7 @@
 import { db } from "../db"
-import type { Attendance, AttendanceStatus, Employee, ViewCtx } from "../types"
+import type { Attendance, AttendanceInput, AttendanceStatus, Employee, ViewCtx } from "../types"
 import { h, clear, toast } from "../ui"
+import { closeModal, openModal } from "../modal"
 
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
@@ -169,10 +170,14 @@ async function paint(ctx: ViewCtx): Promise<void> {
 
   const present = rows.filter((a) => a.status === "present").length
   const leave = rows.filter((a) => a.status !== "present").length
+  const overtimeTotal = rows
+    .filter((a) => a.status === "present")
+    .reduce((sum, a) => sum + (a.overtime ?? 0), 0)
   root.append(
     h("div", { class: "cal-summary" }, [
       h("span", { class: "cal-sum-present", text: `${present} present` }),
       h("span", { class: "cal-sum-leave", text: `${leave} leave` }),
+      h("span", { class: "cal-sum-overtime", text: `${formatHours(overtimeTotal)} overtime` }),
       h("span", { class: "cal-sum-hint muted small", text: "Click a day to cycle: unmarked \u2192 present \u2192 leave \u2192 unmarked" }),
     ]),
   )
@@ -207,23 +212,57 @@ function buildGrid(
     const a = map.get(dateKey)
     const statusCls = a ? (a.status === "present" ? "cal-present" : "cal-leave") : "cal-empty"
     const isToday = dateKey === today
+    const otLabel = a?.overtime != null ? `${formatHours(a.overtime)} overtime` : undefined
+    const statusText = a ? (a.status === "present" ? "Present" : "Leave") : "Unmarked"
     const title = a
-      ? `${dateKey} \u2014 ${a.status === "present" ? "Present" : "Leave"}`
+      ? `${dateKey} \u2014 ${statusText}${otLabel ? " \u2022 " + otLabel : ""}`
       : `${dateKey} \u2014 Unmarked`
-    const btn = h<HTMLButtonElement>(
-      "button",
+
+    const otBtn = a && a.status === "present"
+      ? h<HTMLButtonElement>(
+          "button",
+          {
+            class: `cal-ot${a.overtime ? " cal-ot-set" : ""}`,
+            type: "button",
+            title: a.overtime ? otLabel : "Add overtime hours",
+            "aria-label": a.overtime ? `Overtime ${a.overtime} hours` : "Add overtime hours",
+            onclick: (e: Event) => {
+              e.stopPropagation()
+              void editOvertime(ctx, a)
+            },
+          },
+          [a.overtime ? formatHours(a.overtime) : "\u23f1"],
+        )
+      : null
+
+    const topRow = h("div", { class: "cal-day-top" }, [
+      h("span", { class: "cal-day-num", text: String(day) }),
+      otBtn ?? h("span", {}),
+    ])
+
+    const cell = h<HTMLDivElement>(
+      "div",
       {
         class: `cal-day ${statusCls}${isToday ? " cal-today" : ""}`,
-        type: "button",
+        role: "button",
+        tabindex: "0",
         title,
         onclick: () => void cycleDay(ctx, emp, map, dateKey),
+        onkeydown: (e: KeyboardEvent) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault()
+            void cycleDay(ctx, emp, map, dateKey)
+          }
+        },
       },
       [
-        h("span", { class: "cal-day-num", text: String(day) }),
-        a ? h("span", { class: "cal-day-mark", text: a.status === "present" ? "P" : "L" }) : h("span", {}),
+        topRow,
+        h("div", { class: "cal-day-bottom" }, [
+          a ? h("span", { class: "cal-day-mark", text: a.status === "present" ? "P" : "L" }) : h("span", {}),
+        ]),
       ],
     )
-    cells.push(btn)
+    cells.push(cell)
   }
   const trailing = (7 - (cells.length % 7)) % 7
   for (let i = 0; i < trailing; i++) {
@@ -257,6 +296,7 @@ async function cycleDay(
         check_out: null,
         status: next,
         note: null,
+        overtime: null,
       })
     } else {
       await db.updateAttendance(current.id, {
@@ -267,10 +307,108 @@ async function cycleDay(
         check_out: null,
         status: next,
         note: current.note,
+        overtime: next === "present" ? current.overtime ?? null : null,
       })
     }
     await paint(ctx)
   } catch (err) {
     toast("Could not update attendance: " + (err as Error).message, "error")
+  }
+}
+
+function formatHours(n: number): string {
+  const v = parseFloat(n.toFixed(2))
+  return `${String(v)}h`
+}
+
+function withOvertime(att: Attendance, overtime: number | null): AttendanceInput {
+  return {
+    employee: att.employee,
+    employee_id: att.employee_id,
+    date: att.date,
+    check_in: att.check_in,
+    check_out: att.check_out,
+    status: att.status,
+    note: att.note,
+    overtime,
+  }
+}
+
+async function editOvertime(ctx: ViewCtx, att: Attendance): Promise<void> {
+  const input = h<HTMLInputElement>("input", {
+    class: "input",
+    type: "number",
+    min: "0",
+    step: "0.5",
+    value: att.overtime != null ? String(att.overtime) : "",
+    placeholder: "0",
+    "aria-label": "Overtime hours",
+  })
+  const error = h("div", { class: "form-error", role: "alert" })
+  const saveBtn = h<HTMLButtonElement>("button", { class: "btn btn-primary", type: "submit" }, ["Save"])
+  const form = h("form", { class: "stack" }, [
+    h("div", { class: "modal-item-name", text: `${att.date} \u2014 Overtime hours` }),
+    h("div", { class: "field" }, [
+      h("label", { class: "field-label", text: "Overtime hours" }),
+      input,
+      h("div", { class: "field-hint", text: "Optional. Leave blank for none." }),
+    ]),
+    error,
+    h("div", { class: "form-actions" }, [
+      h("button", { class: "btn btn-ghost", type: "button", onclick: () => closeModal() }, ["Cancel"]),
+      h(
+        "button",
+        {
+          class: "btn btn-ghost",
+          type: "button",
+          onclick: () => void clearOvertime(ctx, att),
+        },
+        ["Clear"],
+      ),
+      saveBtn,
+    ]),
+  ])
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault()
+    const raw = input.value.trim()
+    let ot: number | null
+    if (raw === "") {
+      ot = null
+    } else {
+      const v = Number(raw)
+      if (!Number.isFinite(v) || v < 0) {
+        clear(error)
+        error.append("Enter a valid number of hours (0 or more).")
+        input.focus()
+        return
+      }
+      ot = v
+    }
+    saveBtn.disabled = true
+    saveBtn.textContent = "Saving..."
+    try {
+      await db.updateAttendance(att.id, withOvertime(att, ot))
+      closeModal()
+      await paint(ctx)
+    } catch (err) {
+      saveBtn.disabled = false
+      saveBtn.textContent = "Save"
+      clear(error)
+      error.append("Could not save: " + (err as Error).message)
+    }
+  })
+
+  openModal("Overtime", form)
+  setTimeout(() => input.focus(), 80)
+}
+
+async function clearOvertime(ctx: ViewCtx, att: Attendance): Promise<void> {
+  try {
+    await db.updateAttendance(att.id, withOvertime(att, null))
+    closeModal()
+    await paint(ctx)
+  } catch (err) {
+    toast("Could not clear overtime: " + (err as Error).message, "error")
   }
 }

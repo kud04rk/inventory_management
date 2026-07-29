@@ -38,6 +38,18 @@ fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0006_employees.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 7,
+            description: "index movements by type and created_at",
+            sql: include_str!("../migrations/0007_movements_type_index.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 8,
+            description: "optional overtime hours on attendance",
+            sql: include_str!("../migrations/0008_attendance_overtime.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

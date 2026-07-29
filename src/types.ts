@@ -45,6 +45,29 @@ export interface Stats {
   categories: number
 }
 
+export interface DashboardMetrics {
+  revenue: number
+  unitsSold: number
+  salesCount: number
+  purchaseCost: number
+  unitsPurchased: number
+  purchaseCount: number
+  cogs: number
+  attendanceTotal: number
+  present: number
+  leave: number
+  absent: number
+  todayPresent: number
+  employeeCount: number
+}
+
+export interface TopSeller {
+  item_id: string
+  item_name: string | null
+  units: number
+  revenue: number
+}
+
 export interface Settings {
   currency: string
   storeName: string
@@ -72,6 +95,7 @@ export interface Attendance {
   check_out: string | null
   status: AttendanceStatus
   note: string | null
+  overtime: number | null
   created_at: string
   updated_at: string
 }
